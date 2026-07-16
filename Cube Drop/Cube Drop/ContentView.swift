@@ -45,7 +45,6 @@ final class KnowledgeTree {
 
         case cube
         case pointObject
-        case bonusObject
 
         case ufo
         case missile
@@ -146,7 +145,8 @@ final class KnowledgeTree {
             behaviors: [
                 .blocksLaser,
                 .destroyedByLaser,
-                .spawnsPointObject
+                //.spawnsPointObject,  // Removed as per instruction
+                .awardsScore(10)
             ],
             scoreValue: 10,
             weakness: [
@@ -175,26 +175,6 @@ final class KnowledgeTree {
                 .awardsScore(5)
             ],
             scoreValue: 5,
-            weakness: [
-                .playerLaser
-            ],
-            canBeTargetedByLaser: true
-        )
-
-
-
-        //--------------------------------------------------
-        // BONUS OBJECT
-        //--------------------------------------------------
-
-        register(
-            .bonusObject,
-            behaviors: [
-                .fallsWithGravity,
-                .destroyedByLaser,
-                .awardsScore(100)
-            ],
-            scoreValue: 100,
             weakness: [
                 .playerLaser
             ],
@@ -253,7 +233,8 @@ final class KnowledgeTree {
             behaviors: [
                 .hostile,
                 .destroyedByLaser,
-                .spawnsMushroom
+                .spawnsMushroom,
+                .awardsScore(50)
             ],
             scoreValue: 50,
             weakness: [
@@ -273,7 +254,8 @@ final class KnowledgeTree {
             behaviors: [
                 .hostile,
                 .destroyedByLaser,
-                .spawnsMushroom
+                .spawnsMushroom,
+                .awardsScore(25)
             ],
             scoreValue: 25,
             weakness: [
@@ -312,7 +294,8 @@ final class KnowledgeTree {
             .grasshopper,
             behaviors: [
                 .hostile,
-                .destroyedByLaser
+                .destroyedByLaser,
+                .awardsScore(80)
             ],
             scoreValue: 80,
             weakness: [
@@ -332,7 +315,8 @@ final class KnowledgeTree {
             behaviors: [
                 .hostile,
                 .destroyedByLaser,
-                .causesGameOver
+                .causesGameOver,
+                .awardsScore(120)
             ],
             scoreValue: 120,
             weakness: [
@@ -406,16 +390,15 @@ struct PhysicsCategory {
     static let laser: Int = 1 << 0
     static let cube: Int = 1 << 1
     static let pointObject: Int = 1 << 2
-    static let bonusObject: Int = 1 << 3
-    static let ufo: Int = 1 << 4
-    static let missile: Int = 1 << 5
-    static let centipede: Int = 1 << 6
-    static let mushroom: Int = 1 << 7
-    static let grasshopper: Int = 1 << 8
-    static let spider: Int = 1 << 9
-    static let ladybug: Int = 1 << 10
-    static let ground: Int = 1 << 11
-    static let player: Int = 1 << 12
+    static let ufo: Int = 1 << 3
+    static let missile: Int = 1 << 4
+    static let centipede: Int = 1 << 5
+    static let mushroom: Int = 1 << 6
+    static let grasshopper: Int = 1 << 7
+    static let spider: Int = 1 << 8
+    static let ladybug: Int = 1 << 9
+    static let ground: Int = 1 << 10
+    static let player: Int = 1 << 11
 }
 
 final class GameState: ObservableObject {
@@ -491,6 +474,11 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     var activeLasers: [SCNNode] = []
     
     var playerNode: SCNNode?
+    
+    var grasshopperDirection: Float = 1.0
+    var grasshopperSpeed: Float = 1.5
+
+    var grasshopperJumping = Set<ObjectIdentifier>()
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -689,6 +677,21 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         enemyRoot.addChildNode(node)
     }
+
+    func spawnLadybug(at worldPosition: SCNVector3) {
+        let geo = SCNSphere(radius: 0.2)
+        geo.firstMaterial?.diffuse.contents = UIColor.red
+        let node = EntityNode(kind: .ladybug, geometry: geo)
+        node.name = "ladybug"
+        node.position = worldPosition
+        let body = SCNPhysicsBody(type: .kinematic, shape: SCNPhysicsShape(geometry: geo, options: nil))
+        body.categoryBitMask = PhysicsCategory.ladybug
+        body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.player
+        body.collisionBitMask = PhysicsCategory.none
+        node.physicsBody = body
+        enemyRoot.addChildNode(node)
+    }
+
     func spawnSpider() {
 
         let geo = SCNSphere(radius: 0.3)
@@ -734,6 +737,21 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         enemyRoot.addChildNode(node)
     }
+
+    func spawnSpider(at worldPosition: SCNVector3) {
+        let geo = SCNSphere(radius: 0.3)
+        geo.firstMaterial?.diffuse.contents = UIColor.black
+        let node = EntityNode(kind: .spider, geometry: geo)
+        node.name = "spider"
+        node.position = worldPosition
+        let body = SCNPhysicsBody(type: .kinematic, shape: SCNPhysicsShape(geometry: geo, options: nil))
+        body.categoryBitMask = PhysicsCategory.spider
+        body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.player
+        body.collisionBitMask = PhysicsCategory.none
+        node.physicsBody = body
+        enemyRoot.addChildNode(node)
+    }
+
     func spawnCentipedeSegment(
         at position: SCNVector3
     ) {
@@ -778,6 +796,20 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         enemyRoot.addChildNode(node)
     }
+
+    func spawnRewardEnemy(at worldPosition: SCNVector3) {
+        // Randomly spawn a spider, ladybug, or centipede segment at the given position
+        let choice = Int.random(in: 0...2)
+        switch choice {
+        case 0:
+            spawnSpider(at: worldPosition)
+        case 1:
+            spawnLadybug(at: worldPosition)
+        default:
+            spawnCentipedeSegment(at: worldPosition)
+        }
+    }
+
     func setupLighting() {
         let ambient = SCNNode()
         ambient.light = SCNLight()
@@ -1028,9 +1060,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         case "pointObject":
             return .pointObject
 
-        case "bonusObject":
-            return .bonusObject
-
         case "cube":
             return .cube
 
@@ -1118,8 +1147,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
 
             case .causesGameOver:
-
-                endGame = true
+                if attacker == .missile { 
+                    endGame = true 
+                }
 
 
             default:
@@ -1140,6 +1170,11 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
                 kind: targetKind,
                 at: contactPoint
             )
+            
+            // If a cube was destroyed by the player's laser, spawn a reward enemy instead of a point object
+            if shouldDestroy, targetKind == .cube, attacker == .playerLaser {
+                spawnRewardEnemy(at: contactPoint)
+            }
         }
 
 
@@ -1147,13 +1182,14 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         //--------------------------------------------------
         // Cube creates falling point
         //--------------------------------------------------
-
+/*
         if spawnPoint {
 
             spawnPointObject(
                 at: contactPoint
             )
         }
+*/
 
 
 
@@ -1312,112 +1348,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
                 at: point
             )
         }
-
-
-
-        //--------------------------------------------------
-        // BONUS OBJECT DESTROYED
-        //--------------------------------------------------
-
-        if kind == .bonusObject {
-
-            destroyNearbyPoints(
-                center: point,
-                radius: 3.0
-            )
-        }
-
-
-
-        //--------------------------------------------------
-        // SCORE
-        //--------------------------------------------------
-
-        if let profile = knowledge.profile(for: kind) {
-
-            gameState.score += profile.scoreValue
-            gameState.combo += 1
-        }
-    }
-    func spawnBurstRing(at position: SCNVector3, radius: Float) {
-
-        let ring = SCNTorus(
-            ringRadius: CGFloat(radius),
-            pipeRadius: 0.03
-        )
-
-        ring.firstMaterial?.diffuse.contents = UIColor.yellow
-        ring.firstMaterial?.emission.contents = UIColor.yellow
-        ring.firstMaterial?.lightingModel = .constant
-
-
-        let node = SCNNode(geometry: ring)
-        node.position = position
-
-        scene.rootNode.addChildNode(node)
-
-
-        let expand = SCNAction.scale(
-            to: 2.0,
-            duration: 0.4
-        )
-
-        let fade = SCNAction.fadeOut(
-            duration: 0.4
-        )
-
-
-        node.runAction(
-            .sequence([
-                .group([
-                    expand,
-                    fade
-                ]),
-                .removeFromParentNode()
-            ])
-        )
-    }
-    func destroyNearbyPoints(center: SCNVector3, radius: Float) {
-
-        var pointsToDestroy: [SCNNode] = []
-
-        enemyRoot.enumerateChildNodes { node, _ in
-
-            guard self.kind(of: node) == .pointObject else {
-                return
-            }
-
-            let distance = self.distanceBetween(
-                node.worldPosition,
-                center
-            )
-
-            if distance <= radius {
-                pointsToDestroy.append(node)
-            }
-        }
-
-
-        for point in pointsToDestroy {
-
-            /*
-            spawnExplosion(
-                at: point.worldPosition,
-                color: .yellow
-            )
-            */
-
-            point.removeFromParentNode()
-
-            gameState.score += 5
-            gameState.combo += 1
-        }
-
-
-        spawnBurstRing(
-            at: center,
-            radius: radius
-        )
     }
     func distanceBetween(_ a: SCNVector3, _ b: SCNVector3) -> Float {
 
@@ -1680,7 +1610,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         body.contactTestBitMask =
             PhysicsCategory.cube |
             PhysicsCategory.pointObject |
-            PhysicsCategory.bonusObject |
             PhysicsCategory.ufo |
             PhysicsCategory.missile |
             PhysicsCategory.centipede |
@@ -1806,13 +1735,12 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     }
     func updateGrasshopper(_ grasshopper: SCNNode) {
 
-        // Prevent multiple jumps at the same time
-        if grasshopper.action(forKey: "jumping") != nil {
+        let id = ObjectIdentifier(grasshopper)
+
+        // Already jumping
+        if grasshopperJumping.contains(id) {
             return
         }
-
-
-        let maxJump: Float = 2.5
 
 
         guard let player = playerNode else {
@@ -1820,80 +1748,151 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         }
 
 
-        let grasshopperPosition =
+        let playerDistance = distanceBetween(
+            grasshopper.presentation.worldPosition,
+            player.presentation.worldPosition
+        )
+
+
+        let jumpDistance: Float = 4.0
+
+
+        grasshopperJumping.insert(id)
+
+
+        //--------------------------------------------------
+        // PLAYER IS REACHABLE
+        //--------------------------------------------------
+
+        if playerDistance < jumpDistance {
+
+            arcJump(
+                grasshopper: grasshopper,
+                target: player.presentation.worldPosition
+            )
+
+            return
+        }
+
+
+        //--------------------------------------------------
+        // OTHERWISE MOVE ACROSS FIELD
+        //--------------------------------------------------
+
+        let current = grasshopper.presentation.position
+
+
+        let nextX =
+            current.x +
+            grasshopperDirection * 1.5
+
+
+        let target = SCNVector3(
+            nextX,
+            current.y,
+            current.z
+        )
+
+
+        arcJump(
+            grasshopper: grasshopper,
+            target: target
+        )
+    }
+    func checkGrasshopperLanding(
+        _ grasshopper: SCNNode
+    ) {
+
+        guard let player = playerNode else {
+            return
+        }
+
+
+        let distance = distanceBetween(
+            grasshopper.presentation.worldPosition,
+            player.presentation.worldPosition
+        )
+
+
+        if distance < 0.45 {
+
+            gameState.isGameOver = true
+
+            spawnExplosion(
+                at: player.position,
+                color: .red
+            )
+
+            return
+        }
+
+
+        //--------------------------------------------------
+        // Bounce direction after landing
+        //--------------------------------------------------
+
+        grasshopperDirection *= -1
+    }
+    func arcJump(
+        grasshopper: SCNNode,
+        target: SCNVector3
+    ) {
+
+        let start =
             grasshopper.presentation.worldPosition
 
-        let playerPosition =
-            player.presentation.worldPosition
+
+        let height: Float = 1.8
 
 
-        let playerDistance =
-            distanceBetween(
-                grasshopperPosition,
-                playerPosition
+        let mid = SCNVector3(
+            (start.x + target.x) / 2,
+            max(start.y,target.y) + height,
+            (start.z + target.z) / 2
+        )
+
+
+        let moveUp = SCNAction.move(
+            to: mid,
+            duration: 0.25
+        )
+
+        moveUp.timingMode = .easeOut
+
+
+        let moveDown = SCNAction.move(
+            to: target,
+            duration: 0.25
+        )
+
+        moveDown.timingMode = .easeIn
+
+
+        let finish = SCNAction.run {
+            [weak self, weak grasshopper] _ in
+
+            guard let self,
+                  let grasshopper
+            else { return }
+
+
+            self.grasshopperJumping.remove(
+                ObjectIdentifier(grasshopper)
             )
 
 
-        //--------------------------------------------------
-        // JUMP TO PLAYER
-        //--------------------------------------------------
-
-        if playerDistance <= maxJump {
-
-            grasshopper.runAction(
-                .sequence([
-                    .run { [weak self, weak grasshopper] _ in
-                        guard let self,
-                              let grasshopper else { return }
-
-                        self.jumpToPlayer(grasshopper)
-                    }
-                ]),
-                forKey: "jumping"
+            self.checkGrasshopperLanding(
+                grasshopper
             )
-
-            return
         }
 
-
-
-        //--------------------------------------------------
-        // JUMP TO NEAREST CUBE
-        //--------------------------------------------------
-
-        if let cube = nearestReachableCube(
-            from: grasshopperPosition,
-            maxDistance: maxJump
-        ) {
-
-            grasshopper.runAction(
-                .sequence([
-                    .run { [weak self, weak grasshopper] _ in
-                        guard let self,
-                              let grasshopper else { return }
-
-                        self.jumpToCube(
-                            grasshopper: grasshopper,
-                            cube: cube
-                        )
-                    }
-                ]),
-                forKey: "jumping"
-            )
-
-            return
-        }
-
-
-
-        //--------------------------------------------------
-        // NO AVAILABLE TARGET
-        // WAIT INSTEAD OF DYING
-        //--------------------------------------------------
 
         grasshopper.runAction(
-            .wait(duration: 0.5),
-            forKey: "waiting"
+            .sequence([
+                moveUp,
+                moveDown,
+                finish
+            ])
         )
     }
     //---------------------------------------------------------
@@ -2078,24 +2077,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             .moveBy(x: 0, y: -12, z: 0, duration: 2.0 / gameState.difficulty),
             .removeFromParentNode()
         ]))
-    }
-
-    func spawnBonusObject(at worldPosition: SCNVector3) {
-        let geo = SCNPyramid(width: 0.5, height: 0.6, length: 0.5)
-        geo.firstMaterial?.diffuse.contents = UIColor.systemYellow
-        geo.firstMaterial?.emission.contents = UIColor.systemYellow.withAlphaComponent(0.35)
-
-        let node = EntityNode(kind: .bonusObject, geometry: geo)
-        node.position = worldPosition
-
-        let body = SCNPhysicsBody(type: .dynamic, shape: SCNPhysicsShape(geometry: geo, options: nil))
-        body.categoryBitMask = PhysicsCategory.bonusObject
-        body.contactTestBitMask = PhysicsCategory.ground | PhysicsCategory.laser
-        body.collisionBitMask = PhysicsCategory.ground
-        body.isAffectedByGravity = true
-        node.physicsBody = body
-
-        enemyRoot.addChildNode(node)
     }
 
     func spawnHitBurst(at position: SCNVector3, color: UIColor) {
@@ -2285,17 +2266,30 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         }
 
 
-
         //--------------------------------------------------
-        // MISSILE HITS PLAYER ONLY
-        // NO MISSILE-CUBE DETECTION
+        // MISSILE HITS CUBE -> remove missile, cube unaffected
         //--------------------------------------------------
-
         let isMissileA =
             categoryA == PhysicsCategory.missile
 
         let isMissileB =
             categoryB == PhysicsCategory.missile
+
+        if isMissileA && categoryB == PhysicsCategory.cube {
+            a.removeFromParentNode()
+            return
+        }
+
+        if isMissileB && categoryA == PhysicsCategory.cube {
+            b.removeFromParentNode()
+            return
+        }
+
+
+        //--------------------------------------------------
+        // MISSILE HITS PLAYER ONLY
+        // NO MISSILE-CUBE DETECTION
+        //--------------------------------------------------
 
 
         if isMissileA &&
@@ -2352,49 +2346,19 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
             return
         }
-
-
-
-        //--------------------------------------------------
-        // BONUS OBJECT HITS GROUND
-        //--------------------------------------------------
-
-        if categoryA == PhysicsCategory.bonusObject &&
-           categoryB == PhysicsCategory.ground {
-
-            a.removeFromParentNode()
-
-            return
-        }
-
-
-        if categoryB == PhysicsCategory.bonusObject &&
-           categoryA == PhysicsCategory.ground {
-
-            b.removeFromParentNode()
-
-            return
-        }
     }
     func renderer(
         _ renderer: SCNSceneRenderer,
         updateAtTime time: TimeInterval
     ) {
 
-        //--------------------------------------------------
-        // Calculate delta time
-        //--------------------------------------------------
-
-        let dt = lastUpdateTime == 0
+        let dt =
+            lastUpdateTime == 0
             ? 0
             : time - lastUpdateTime
 
         lastUpdateTime = time
 
-
-        //--------------------------------------------------
-        // Stop updates after game over
-        //--------------------------------------------------
 
         if gameState.isGameOver {
             return
@@ -2402,47 +2366,55 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
 
         //--------------------------------------------------
-        // Difficulty scaling
+        // GAME DIFFICULTY
         //--------------------------------------------------
 
         updateDifficulty()
 
 
+
         //--------------------------------------------------
-        // Respawn cubes if all destroyed
+        // RESPAWN CUBES IF NEEDED
         //--------------------------------------------------
 
         if allCubesGone() {
+
             respawnAllCubes()
+
         }
 
 
+
         //--------------------------------------------------
-        // Automatic laser fire
+        // AUTO FIRE PLAYER LASER
         //--------------------------------------------------
 
         if autoFireEnabled,
            time - lastAutoFireTime >= autoFireInterval {
 
             lastAutoFireTime = time
+
             fireLaser()
         }
 
 
+
         //--------------------------------------------------
-        // UFO spawning
+        // SPAWN UFO
         //--------------------------------------------------
 
         if time - lastFireTime >
             max(0.6, 2.5 / gameState.difficulty) {
 
             lastFireTime = time
+
             spawnUFOIfNeeded()
         }
 
 
+
         //--------------------------------------------------
-        // Move cube grid
+        // MOVE CUBE GRID
         //--------------------------------------------------
 
         gridOffset +=
@@ -2450,22 +2422,28 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             gridSpeed *
             Float(dt)
 
+
         gridRoot.position.x = gridOffset
+
 
 
         if abs(gridOffset) >= gridMaxOffset {
 
             gridDirection *= -1
 
-            gridOffset = max(
-                min(gridOffset, gridMaxOffset),
-                -gridMaxOffset
-            )
+
+            gridOffset =
+                max(
+                    min(gridOffset, gridMaxOffset),
+                    -gridMaxOffset
+                )
+
 
             gridRoot.position.y -= 0.5
 
 
             if gridRoot.position.y <= -4.5 {
+
                 gameState.isGameOver = true
             }
         }
@@ -2473,44 +2451,37 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
 
         //--------------------------------------------------
-        // GRASSHOPPER AI UPDATE
+        // GRASSHOPPER AI
         //--------------------------------------------------
 
-        scene.rootNode.enumerateChildNodes { [weak self] node, _ in
+        scene.rootNode.enumerateChildNodes { node, _ in
 
-            guard let self = self else {
+            guard let entity = node as? EntityNode else {
                 return
             }
 
 
-            if let grasshopper = node as? EntityNode,
-               grasshopper.kind == .grasshopper {
+            if entity.kind == .grasshopper {
 
-
-                self.updateGrasshopper(
-                    grasshopper
-                )
+                self.updateGrasshopper(entity)
             }
         }
 
 
 
         //--------------------------------------------------
-        // Enemy movement
+        // OTHER ENTITY MOVEMENT
         //--------------------------------------------------
 
-        updateEntities(
-            dt: dt
-        )
+        updateEntities(dt: dt)
+
 
 
         //--------------------------------------------------
-        // Laser movement
+        // LASER MOVEMENT
         //--------------------------------------------------
 
-        updateLasers(
-            dt: dt
-        )
+        updateLasers(dt: dt)
     }
     func spawnGrasshopper() {
 
@@ -2786,3 +2757,4 @@ struct ContentView: View {
         .background(Color.black)
     }
 }
+
