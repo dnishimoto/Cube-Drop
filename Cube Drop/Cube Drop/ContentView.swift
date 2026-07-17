@@ -35,6 +35,27 @@ import SwiftUI
 import SceneKit
 import UIKit
 import Combine
+import AudioToolbox
+
+//======================================================================
+// SOUND SYSTEM
+// Lightweight wrapper around iOS system sounds so every important
+// action gets audible feedback without needing bundled audio assets.
+//======================================================================
+
+enum GameSound: SystemSoundID {
+    case laserFire      = 1104
+    case cubeHit        = 1105
+    case missileHit      = 1106
+    case enemyDestroyed = 1111
+    case bonus          = 1025
+    case gameOver        = 1073
+}
+
+func playSound(_ id: SystemSoundID) {
+    AudioServicesPlaySystemSound(id)
+}
+
 
 final class KnowledgeTree {
 
@@ -45,6 +66,7 @@ final class KnowledgeTree {
 
         case cube
         case pointObject
+        case bonusPointObject
 
         case ufo
         case missile
@@ -72,10 +94,11 @@ final class KnowledgeTree {
 
         case awardsScore(Int)
 
-        case spawnsPointObject
         case spawnsMushroom
 
-        case causesGameOver
+        case burstOnDestroy(radius: Float)
+
+        case causesGameOverOnContact
 
         case pathfindingObstacle
 
@@ -138,6 +161,9 @@ final class KnowledgeTree {
 
         //--------------------------------------------------
         // CUBE
+        // Destroyed cubes drop a falling point object (handled
+        // explicitly in resolveHit, since the drop type is randomized
+        // between normal / bonus / reward-enemy).
         //--------------------------------------------------
 
         register(
@@ -145,7 +171,6 @@ final class KnowledgeTree {
             behaviors: [
                 .blocksLaser,
                 .destroyedByLaser,
-                //.spawnsPointObject,  // Removed as per instruction
                 .awardsScore(10)
             ],
             scoreValue: 10,
@@ -184,6 +209,28 @@ final class KnowledgeTree {
 
 
         //--------------------------------------------------
+        // BONUS POINT OBJECT
+        // Rare, high-value, bursts nearby point objects when destroyed.
+        //--------------------------------------------------
+
+        register(
+            .bonusPointObject,
+            behaviors: [
+                .fallsWithGravity,
+                .destroyedByLaser,
+                .awardsScore(100),
+                .burstOnDestroy(radius: 2.2)
+            ],
+            scoreValue: 100,
+            weakness: [
+                .playerLaser
+            ],
+            canBeTargetedByLaser: true
+        )
+
+
+
+        //--------------------------------------------------
         // UFO
         //--------------------------------------------------
 
@@ -211,9 +258,7 @@ final class KnowledgeTree {
             .missile,
             behaviors: [
                 .hostile,
-                .destroyedByLaser,
-                .destroyedByMissile,
-                .causesGameOver
+                .destroyedByLaser
             ],
             scoreValue: 0,
             weakness: [
@@ -234,6 +279,7 @@ final class KnowledgeTree {
                 .hostile,
                 .destroyedByLaser,
                 .spawnsMushroom,
+                .causesGameOverOnContact,
                 .awardsScore(50)
             ],
             scoreValue: 50,
@@ -255,6 +301,7 @@ final class KnowledgeTree {
                 .hostile,
                 .destroyedByLaser,
                 .spawnsMushroom,
+                .causesGameOverOnContact,
                 .awardsScore(25)
             ],
             scoreValue: 25,
@@ -295,6 +342,7 @@ final class KnowledgeTree {
             behaviors: [
                 .hostile,
                 .destroyedByLaser,
+                .causesGameOverOnContact,
                 .awardsScore(80)
             ],
             scoreValue: 80,
@@ -315,7 +363,7 @@ final class KnowledgeTree {
             behaviors: [
                 .hostile,
                 .destroyedByLaser,
-                .causesGameOver,
+                .causesGameOverOnContact,
                 .awardsScore(120)
             ],
             scoreValue: 120,
@@ -329,6 +377,7 @@ final class KnowledgeTree {
 
         //--------------------------------------------------
         // LADYBUG
+        // Slower, valuable, non-lethal target.
         //--------------------------------------------------
 
         register(
@@ -389,6 +438,11 @@ struct PhysicsCategory {
     static let none: Int = 0
     static let laser: Int = 1 << 0
     static let cube: Int = 1 << 1
+    // bonusPointObject reuses the pointObject category on purpose -
+    // they behave identically at the physics layer (fall, get
+    // removed on ground contact, targetable by laser). The
+    // distinction that matters (score, burst-on-destroy) lives in
+    // KnowledgeTree / EntityNode.kind, not in the physics category.
     static let pointObject: Int = 1 << 2
     static let ufo: Int = 1 << 3
     static let missile: Int = 1 << 4
@@ -439,6 +493,14 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     var sceneView: SCNView!
     var scene: SCNScene!
     var cameraNode = SCNNode()
+    
+    func topOfGridY() -> Float {
+    let pitch = Float(cubeSize + cubeSpacing)
+    return groundY + 3.0 + Float(gridHeight - 1) * pitch
+    }
+    var pointObjectSpawnChance: Int = 18
+    var centipedeFollowTarget: [ObjectIdentifier: SCNNode] = [:]
+    var centipedeTrailSpacing: Float = 0.55
 
     var gridRoot = SCNNode()
     var enemyRoot = SCNNode()
@@ -469,16 +531,27 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     var lastAutoFireTime: TimeInterval = 0
 
     var gameSessionID = UUID()
-    
-    var shouldSpawnMushroom = false
-    var activeLasers: [SCNNode] = []
-    
-    var playerNode: SCNNode?
-    
-    var grasshopperDirection: Float = 1.0
-    var grasshopperSpeed: Float = 1.5
 
+    var activeLasers: [SCNNode] = []
+
+    var playerNode: SCNNode?
+
+    // Grasshopper AI state
     var grasshopperJumping = Set<ObjectIdentifier>()
+
+    // Centipede AI state
+    var centipedeDirection: [ObjectIdentifier: Float] = [:]
+    var centipedeDropping = Set<ObjectIdentifier>()
+
+    // Spider AI state
+    var spiderAnchorY: [ObjectIdentifier: Float] = [:]
+    var spiderThreads: [ObjectIdentifier: SCNNode] = [:]
+
+    // Ladybug AI state
+    var ladybugDirection: [ObjectIdentifier: Float] = [:]
+
+    private var slashStartScreenPoint: CGPoint?
+    private var slashEndScreenPoint: CGPoint?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -488,23 +561,14 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         setupCamera()
         setupWorld()
         setupGrid()
-        spawnGrasshopper()
         setupGestures()
-        spawnCentipedeHead()
-
-        spawnCentipedeSegment(
-            at: SCNVector3(-2, groundY + 5, 0)
-        )
-
-        spawnCentipedeSegment(
-            at: SCNVector3(-1, groundY + 5, 0)
-        )
-
-        spawnSpider()
-
-        spawnLadybug()
 
         spawnGrasshopper()
+        let headNode = spawnCentipedeHead(at: SCNVector3(-2.0, topOfGridY(), 0.0))
+        spawnCentipedeSegment(at: SCNVector3(-2.0, topOfGridY(), 0.0), follow: headNode)
+        
+             spawnSpider()
+        spawnLadybug()
 
         scene.physicsWorld.contactDelegate = self
         scene.physicsWorld.gravity = SCNVector3Zero
@@ -588,225 +652,161 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         scene.rootNode.addChildNode(cameraNode)
     }
-    func spawnCentipedeHead() {
+    @discardableResult
+    func spawnCentipedeHead(at worldPosition: SCNVector3) -> SCNNode {
+        let size = cubeSize * 1.2
+        let plane = makeLabelBillboard(text: "CH", color: .white, worldSize: size)
+        let node = EntityNode(kind: .centipedeHead, geometry: plane)
+        node.name = "CH"
+        node.position = worldPosition
+        node.renderingOrder = 100
 
-        let geo = SCNSphere(radius: 0.22)
-        geo.firstMaterial?.diffuse.contents = UIColor.red
-        geo.firstMaterial?.emission.contents = UIColor.red
-
-
-        let node = EntityNode(
-            kind: .centipedeHead,
-            geometry: geo
-        )
-
-        node.name = "centipedeHead"
-
-        node.position = SCNVector3(
-            -3,
-            groundY + 5,
-            0
-        )
-
-
-        let body = SCNPhysicsBody(
-            type: .kinematic,
-            shape: SCNPhysicsShape(
-                geometry: geo,
-                options: nil
-            )
-        )
-
+        let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
         body.categoryBitMask = PhysicsCategory.centipede
-
-        body.contactTestBitMask =
-            PhysicsCategory.laser |
-            PhysicsCategory.cube |
-            PhysicsCategory.player
-
-        body.collisionBitMask =
-            PhysicsCategory.none
-
+        body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.cube | PhysicsCategory.player
+        body.collisionBitMask = PhysicsCategory.none
         node.physicsBody = body
 
+        let billboard = SCNBillboardConstraint()
+        billboard.freeAxes = .all
+        node.constraints = [billboard]
 
+        centipedeDirection[ObjectIdentifier(node)] = 1.0
+        enemyRoot.addChildNode(node)
+        return node
+    }
+
+    func spawnCentipedeSegment(at position: SCNVector3, follow target: SCNNode) {
+        let size = cubeSize * 1.2
+        let plane = makeLabelBillboard(text: "CS", color: .white, worldSize: size)
+        let node = EntityNode(kind: .centipedeSegment, geometry: plane)
+        node.name = "CS"
+        node.position = position
+        node.renderingOrder = 100
+
+        let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
+        body.categoryBitMask = PhysicsCategory.centipede
+        body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.cube | PhysicsCategory.player
+        body.collisionBitMask = PhysicsCategory.none
+        node.physicsBody = body
+
+        let billboard = SCNBillboardConstraint()
+        billboard.freeAxes = .all
+        node.constraints = [billboard]
+
+        centipedeDirection[ObjectIdentifier(node)] = Bool.random() ? 1.0 : -1.0
+        centipedeFollowTarget[ObjectIdentifier(node)] = target
         enemyRoot.addChildNode(node)
     }
     func spawnLadybug() {
-
-        let geo = SCNSphere(radius: 0.2)
-
-        geo.firstMaterial?.diffuse.contents =
-            UIColor.red
-
-
-        let node = EntityNode(
-            kind: .ladybug,
-            geometry: geo
-        )
-
-        node.name = "ladybug"
-
-        node.position = SCNVector3(
-            5,
-            groundY + 4,
-            0
-        )
-
-
-        let body = SCNPhysicsBody(
-            type: .kinematic,
-            shape: SCNPhysicsShape(
-                geometry: geo,
-                options: nil
-            )
-        )
-
-
-        body.categoryBitMask =
-            PhysicsCategory.ladybug
-
-
-        body.contactTestBitMask =
-            PhysicsCategory.laser |
-            PhysicsCategory.player
-
-
-        node.physicsBody = body
-
-
-        enemyRoot.addChildNode(node)
-    }
-
-    func spawnLadybug(at worldPosition: SCNVector3) {
-        let geo = SCNSphere(radius: 0.2)
-        geo.firstMaterial?.diffuse.contents = UIColor.red
-        let node = EntityNode(kind: .ladybug, geometry: geo)
-        node.name = "ladybug"
-        node.position = worldPosition
-        let body = SCNPhysicsBody(type: .kinematic, shape: SCNPhysicsShape(geometry: geo, options: nil))
+        let size = cubeSize * 1.2
+        let plane = makeLabelBillboard(text: "L", color: .white, worldSize: size)
+        let node = EntityNode(kind: .ladybug, geometry: plane)
+        node.name = "L"
+        node.position = SCNVector3(5, groundY + 4, 0)
+        node.renderingOrder = 100
+        let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
         body.categoryBitMask = PhysicsCategory.ladybug
         body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.player
         body.collisionBitMask = PhysicsCategory.none
         node.physicsBody = body
+        let billboard = SCNBillboardConstraint()
+        billboard.freeAxes = .all
+        node.constraints = [billboard]
+        ladybugDirection[ObjectIdentifier(node)] = Bool.random() ? 1.0 : -1.0
         enemyRoot.addChildNode(node)
+    }
+
+    func spawnLadybug(at worldPosition: SCNVector3) {
+        let size = cubeSize * 1.2
+        let plane = makeLabelBillboard(text: "L", color: .white, worldSize: size)
+        let node = EntityNode(kind: .ladybug, geometry: plane)
+        node.name = "L"
+        node.position = worldPosition
+        node.renderingOrder = 100
+        let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
+        body.categoryBitMask = PhysicsCategory.ladybug
+        body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.player
+        body.collisionBitMask = PhysicsCategory.none
+        node.physicsBody = body
+        let billboard = SCNBillboardConstraint()
+        billboard.freeAxes = .all
+        node.constraints = [billboard]
+        ladybugDirection[ObjectIdentifier(node)] = Bool.random() ? 1.0 : -1.0
+        enemyRoot.addChildNode(node)
+    }
+
+    //---------------------------------------------------------
+    // Picks an x position over a gap in the top row of cubes so
+    // the spider looks like it is "entering through an opening".
+    // Falls back to a random column if the top row is fully intact.
+    //---------------------------------------------------------
+    func topRowOpeningX() -> Float {
+        let pitch = Float(cubeSize + cubeSpacing)
+        let originX = -Float(gridWidth) * pitch / 2 + pitch / 2
+
+        let row = gridHeight - 1
+        if slots.indices.contains(row) {
+            var openColumns: [Int] = []
+            for col in 0..<slots[row].count {
+                if slots[row][col].node == nil {
+                    openColumns.append(col)
+                }
+            }
+            if let col = openColumns.randomElement() {
+                return originX + Float(col) * pitch
+            }
+        }
+
+        let col = Int.random(in: 0..<max(gridWidth, 1))
+        return originX + Float(col) * pitch
+    }
+
+    func spiderSpawnY() -> Float {
+        groundY + 3.0 + Float(gridHeight) * Float(cubeSize + cubeSpacing) + 1.5
     }
 
     func spawnSpider() {
-
-        let geo = SCNSphere(radius: 0.3)
-
-        geo.firstMaterial?.diffuse.contents =
-            UIColor.black
-
-
-        let node = EntityNode(
-            kind: .spider,
-            geometry: geo
-        )
-
-        node.name = "spider"
-
-        node.position = SCNVector3(
-            3,
-            groundY + 2,
-            0
-        )
-
-
-        let body = SCNPhysicsBody(
-            type: .kinematic,
-            shape: SCNPhysicsShape(
-                geometry: geo,
-                options: nil
-            )
-        )
-
-
-        body.categoryBitMask =
-            PhysicsCategory.spider
-
-
-        body.contactTestBitMask =
-            PhysicsCategory.laser |
-            PhysicsCategory.player
-
-
-        node.physicsBody = body
-
-
-        enemyRoot.addChildNode(node)
+        let x = topRowOpeningX()
+        spawnSpider(at: SCNVector3(x, spiderSpawnY(), wallZ))
     }
 
     func spawnSpider(at worldPosition: SCNVector3) {
-        let geo = SCNSphere(radius: 0.3)
-        geo.firstMaterial?.diffuse.contents = UIColor.black
-        let node = EntityNode(kind: .spider, geometry: geo)
-        node.name = "spider"
+        let size = cubeSize * 1.2
+        let plane = makeLabelBillboard(text: "S", color: .white, worldSize: size)
+        let node = EntityNode(kind: .spider, geometry: plane)
+        node.name = "S"
         node.position = worldPosition
-        let body = SCNPhysicsBody(type: .kinematic, shape: SCNPhysicsShape(geometry: geo, options: nil))
+        node.renderingOrder = 100
+        let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
         body.categoryBitMask = PhysicsCategory.spider
         body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.player
         body.collisionBitMask = PhysicsCategory.none
         node.physicsBody = body
-        enemyRoot.addChildNode(node)
-    }
+        let billboard = SCNBillboardConstraint()
+        billboard.freeAxes = .all
+        node.constraints = [billboard]
 
-    func spawnCentipedeSegment(
-        at position: SCNVector3
-    ) {
-
-        let geo = SCNSphere(radius: 0.18)
-
-        geo.firstMaterial?.diffuse.contents =
-            UIColor.orange
-
-
-        let node = EntityNode(
-            kind: .centipedeSegment,
-            geometry: geo
-        )
-
-        node.name = "centipedeSegment"
-
-        node.position = position
-
-
-        let body = SCNPhysicsBody(
-            type: .kinematic,
-            shape: SCNPhysicsShape(
-                geometry: geo,
-                options: nil
-            )
-        )
-
-
-        body.categoryBitMask =
-            PhysicsCategory.centipede
-
-
-        body.contactTestBitMask =
-            PhysicsCategory.laser |
-            PhysicsCategory.cube |
-            PhysicsCategory.player
-
-
-        node.physicsBody = body
-
+        spiderAnchorY[ObjectIdentifier(node)] = worldPosition.y
 
         enemyRoot.addChildNode(node)
     }
 
+ 
     func spawnRewardEnemy(at worldPosition: SCNVector3) {
-        // Randomly spawn a spider, ladybug, or centipede segment at the given position
+        let safeY = min(worldPosition.y, topOfGridY() - 0.5)
+        let safeX = max(-6.0, min(6.0, worldPosition.x))
+        let spawnPoint = SCNVector3(safeX, safeY, worldPosition.z)
+
         let choice = Int.random(in: 0...2)
         switch choice {
         case 0:
-            spawnSpider(at: worldPosition)
+            spawnSpider(at: spawnPoint)
         case 1:
-            spawnLadybug(at: worldPosition)
+            spawnLadybug(at: spawnPoint)
         default:
-            spawnCentipedeSegment(at: worldPosition)
+            let headNode = spawnCentipedeHead(at: spawnPoint)
+            spawnCentipedeSegment(at: spawnPoint, follow: headNode)
         }
     }
 
@@ -833,15 +833,16 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         floorNode.position = SCNVector3(0, groundY, 0)
 
         let body = SCNPhysicsBody(type: .static, shape: SCNPhysicsShape(geometry: SCNBox(width: 200, height: 0.1, length: 200, chamferRadius: 0), options: nil))
-        body.categoryBitMask = PhysicsCategory.cube
+        body.categoryBitMask = PhysicsCategory.ground
 
         body.contactTestBitMask =
             PhysicsCategory.laser |
-            PhysicsCategory.missile
+            PhysicsCategory.missile |
+            PhysicsCategory.pointObject
 
         body.collisionBitMask =
             PhysicsCategory.none
-        
+
         floorNode.physicsBody = body
 
         scene.rootNode.addChildNode(floorNode)
@@ -903,7 +904,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     func loadCube(into slot: inout CubeSlot, animated: Bool) {
         guard slot.node == nil else { return }
 
-            
+
         let cubeGeo = SCNBox(
             width: cubeSize * 0.88,
             height: cubeSize * 0.88,
@@ -961,6 +962,11 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         tap.cancelsTouchesInView = false
         tap.require(toFail: pan)
         sceneView.addGestureRecognizer(tap)
+
+        let slashPan = UIPanGestureRecognizer(target: self, action: #selector(handleSlashPan(_:)))
+        slashPan.minimumNumberOfTouches = 2
+        slashPan.cancelsTouchesInView = false
+        sceneView.addGestureRecognizer(slashPan)
     }
 
     @objc func handleTap(_ gesture: UITapGestureRecognizer) {
@@ -976,6 +982,66 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         guard !gameState.isGameOver else { return }
         let location = gesture.location(in: sceneView)
         moveLaser(toScreenX: location.x)
+    }
+
+    @objc func handleSlashPan(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            slashStartScreenPoint = gesture.location(in: sceneView)
+        case .changed:
+            slashEndScreenPoint = gesture.location(in: sceneView)
+        case .ended, .cancelled, .failed:
+            let start = slashStartScreenPoint
+            let end = slashEndScreenPoint ?? gesture.location(in: sceneView)
+            slashStartScreenPoint = nil
+            slashEndScreenPoint = nil
+            if let start, start != end {
+                performSlash(from: start, to: end)
+            }
+        default:
+            break
+        }
+    }
+
+    private func distanceFromPoint(_ p: CGPoint, toSegment a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let ax = a.x, ay = a.y, bx = b.x, by = b.y
+        let px = p.x, py = p.y
+        let dx = bx - ax, dy = by - ay
+        let len2 = dx*dx + dy*dy
+        if len2 == 0 { return hypot(px - ax, py - ay) }
+        let t = max(0, min(1, ((px - ax) * dx + (py - ay) * dy) / len2))
+        let sx = ax + t * dx
+        let sy = ay + t * dy
+        return hypot(px - sx, py - sy)
+    }
+
+    private func performSlash(from start: CGPoint, to end: CGPoint) {
+        guard !gameState.isGameOver else { return }
+        // Visuals at the mid-point using an approximate y-plane
+        let midScreen = CGPoint(x: (start.x + end.x) * 0.5, y: (start.y + end.y) * 0.5)
+        let approxY: Float = groundY + 2.0
+        let midWorld = worldPointFromScreen(midScreen, yPlane: approxY)
+        spawnSlashSprite(at: midWorld, color: .cyan)
+        spawnSlashShockwave(at: midWorld, color: .cyan)
+
+        // Hit test in screen-space: destroy any targetable entity close to the slash path
+        let threshold: CGFloat = 60
+        scene.rootNode.enumerateChildNodes { [weak self] node, _ in
+            guard let self = self else { return }
+            guard let entityNode = self.findEntityParent(node),
+                  let kind = self.kind(of: entityNode),
+                  let profile = self.knowledge.profile(for: kind),
+                  profile.canBeTargetedByLaser else { return }
+
+            let worldPos = entityNode.presentation.worldPosition
+            let screenPos = self.sceneView.projectPoint(worldPos)
+            let p = CGPoint(x: CGFloat(screenPos.x), y: CGFloat(screenPos.y))
+            let d = self.distanceFromPoint(p, toSegment: start, end)
+            if d <= threshold {
+                let contact = self.worldPointFromScreen(p, yPlane: worldPos.y)
+                self.resolveHit(attacker: .playerLaser, target: entityNode, contactPoint: contact)
+            }
+        }
     }
 
     func moveLaser(toScreenX x: CGFloat) {
@@ -1055,34 +1121,34 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             return entity.kind
         }
 
-        switch node.name {
+        return nil
+    }
 
-        case "pointObject":
-            return .pointObject
+    //--------------------------------------------------
+    // Removes any AI tracking state associated with a node
+    // before it leaves the scene, so dictionaries/sets never
+    // accumulate stale entries.
+    //--------------------------------------------------
 
-        case "cube":
-            return .cube
+    func cleanupTrackingState(for node: SCNNode, kind: KnowledgeTree.EntityKind) {
+        let id = ObjectIdentifier(node)
 
-        case "ufo":
-            return .ufo
+        switch kind {
+        case .spider:
+            removeSpiderThread(for: node)
 
-        case "missile":
-            return .missile
+        case .ladybug:
+            ladybugDirection.removeValue(forKey: id)
 
-        case "mushroom":
-            return .mushroom
+        case .grasshopper:
+            grasshopperJumping.remove(id)
 
-        case "grasshopper":
-            return .grasshopper
-
-        case "spider":
-            return .spider
-
-        case "ladybug":
-            return .ladybug
+        case .centipedeHead, .centipedeSegment:
+            centipedeDirection.removeValue(forKey: id)
+            centipedeDropping.remove(id)
 
         default:
-            return nil
+            break
         }
     }
 
@@ -1091,142 +1157,91 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         target: SCNNode,
         contactPoint: SCNVector3
     ) {
-
         guard let targetKind = kind(of: target),
-              let profile = knowledge.profile(for: targetKind)
-        else {
+              let profile = knowledge.profile(for: targetKind) else {
             return
         }
 
-
         var shouldDestroy = false
         var scoreDelta = 0
-        var spawnPoint = false
-        var spawnMushroom = false
-        var endGame = false
-
-
-        //--------------------------------------------------
-        // Read target behaviors
-        //--------------------------------------------------
+       // var burstRadius: Float? = nil
 
         for behavior in profile.behaviors {
-
             switch behavior {
-
-
             case .destroyedByLaser:
-
                 if attacker == .playerLaser {
                     shouldDestroy = true
                 }
 
-
             case .destroyedByMissile:
-
                 if attacker == .missile {
                     shouldDestroy = true
                 }
 
-
-            case .spawnsPointObject:
-
-                if targetKind == .cube {
-                    spawnPoint = true
-                }
-
-
-            case .spawnsMushroom:
-
-                spawnMushroom = true
-
-
             case .awardsScore(let value):
-
                 scoreDelta += value
 
-
-            case .causesGameOver:
-                if attacker == .missile { 
-                    endGame = true 
-                }
-
+           // case .burstOnDestroy(let radius):
+           //     burstRadius = radius
 
             default:
                 break
             }
         }
 
-
-
-        //--------------------------------------------------
-        // Destroy object
-        //--------------------------------------------------
-
         if shouldDestroy {
+            destroy(node: target, kind: targetKind, at: contactPoint)
 
-            destroy(
-                node: target,
-                kind: targetKind,
-                at: contactPoint
-            )
-            
-            // If a cube was destroyed by the player's laser, spawn a reward enemy instead of a point object
-            if shouldDestroy, targetKind == .cube, attacker == .playerLaser {
-                spawnRewardEnemy(at: contactPoint)
-            }
+            if targetKind == .cube, attacker == .playerLaser {
+                    let roll = Int.random(in: 0..<100)
+
+                    if roll == 0 {
+                        spawnBonusPointObject(at: contactPoint)
+                    } else {
+                        spawnRewardEnemy(at: contactPoint)
+                    }
+                }
+
+            //else if targetKind == .centipedeHead || targetKind == .centipedeSegment {
+            //    spawnMushroomFunc(at: contactPoint)
+            //}
+
+            //else if let radius = burstRadius {
+            //    burstNearbyPointObjects(at: contactPoint, radius: radius)
+           // }
         }
-
-
-
-        //--------------------------------------------------
-        // Cube creates falling point
-        //--------------------------------------------------
-/*
-        if spawnPoint {
-
-            spawnPointObject(
-                at: contactPoint
-            )
-        }
-*/
-
-
-
-        //--------------------------------------------------
-        // Centipede creates mushroom
-        //--------------------------------------------------
-
-        if spawnMushroom {
-
-            spawnMushroomFunc(
-                at: contactPoint
-            )
-        }
-
-
-
-        //--------------------------------------------------
-        // Score
-        //--------------------------------------------------
 
         if scoreDelta > 0 {
-
             gameState.score += scoreDelta
             gameState.combo += 1
         }
+    }
 
+    //--------------------------------------------------
+    // Bonus-object burst effect: destroys nearby falling point
+    // objects and awards extra score for each one caught in the blast.
+    //--------------------------------------------------
 
+    func burstNearbyPointObjects(at position: SCNVector3, radius: Float) {
+        var destroyedCount = 0
 
-        //--------------------------------------------------
-        // Game over
-        //--------------------------------------------------
+        enemyRoot.enumerateChildNodes { node, _ in
+            guard let k = self.kind(of: node), k == .pointObject else { return }
 
-        if endGame {
+            let d = self.distanceBetween(node.presentation.worldPosition, position)
+            if d <= radius {
+                node.removeFromParentNode()
+                destroyedCount += 1
+            }
+        }
 
-            gameState.isGameOver = true
+        if destroyedCount > 0 {
+            gameState.score += destroyedCount * 5
+            spawnExplosion(at: position, color: .yellow)
+            playSound(GameSound.bonus.rawValue)
         }
     }
+
     func spawnMushroomFunc(at worldPosition: SCNVector3) {
 
         let geo = SCNCylinder(
@@ -1282,19 +1297,25 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         at point: SCNVector3
     ) {
 
+        cleanupTrackingState(for: node, kind: kind)
+
         let color =
             (node.geometry?.firstMaterial?.emission.contents as? UIColor)
             ?? .cyan
 
-/*
         if kind != .cube {
-
-            spawnExplosion(
+           /* spawnExplosion(
                 at: point,
                 color: color
             )
+            */
         }
-*/
+
+        playSound(
+            kind == .missile
+                ? GameSound.missileHit.rawValue
+                : GameSound.enemyDestroyed.rawValue
+        )
 
         //--------------------------------------------------
         // REMOVE OBJECT
@@ -1318,29 +1339,16 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
                     forKey: ObjectIdentifier(node)
                 )
             }
-       
+
+            playSound(GameSound.cubeHit.rawValue)
         }
 
-
-
-        //--------------------------------------------------
-        // MISSILE DESTROYED
-        //--------------------------------------------------
-/*
-        if kind == .missile {
-
-            spawnExplosion(
-                at: point,
-                color: .orange
-            )
-        }
-*/
 
 
         //--------------------------------------------------
         // CENTIPEDE DESTROYED
         //--------------------------------------------------
-
+/*
         if kind == .centipedeHead ||
            kind == .centipedeSegment {
 
@@ -1348,6 +1356,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
                 at: point
             )
         }
+ */
     }
     func distanceBetween(_ a: SCNVector3, _ b: SCNVector3) -> Float {
 
@@ -1378,48 +1387,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             self.respawnCube(row: row, col: col)
         }
     }
-    func bounceOffCube(
-        grasshopper: SCNNode,
-        normal: SCNVector3
-    ) {
 
-        guard let body = grasshopper.physicsBody else { return }
-
-        let v = body.velocity
-
-        let dot =
-            v.x * normal.x +
-            v.y * normal.y +
-            v.z * normal.z
-
-        body.velocity = SCNVector3(
-            v.x - 2 * dot * normal.x,
-            v.y,
-            v.z - 2 * dot * normal.z
-        )
-    }
-    func jumpToCube(
-        grasshopper: SCNNode,
-        cube: SCNNode
-    ) {
-
-        let top = cube.presentation.worldPosition
-
-        let landing = SCNVector3(
-            top.x,
-            top.y + Float(cubeSize)/2 + 0.18,
-            top.z
-        )
-
-        let jump = SCNAction.move(
-            to: landing,
-            duration: 0.45
-        )
-
-        jump.timingMode = .easeInEaseOut
-
-        grasshopper.runAction(jump)
-    }
     func activeCubeNodes() -> [SCNNode] {
 
         var cubes: [SCNNode] = []
@@ -1437,12 +1405,21 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         return cubes
     }
+
+    //---------------------------------------------------------
+    // Finds the best reachable cube for a grasshopper jump: any
+    // active cube within max jump range, preferring whichever
+    // lands the grasshopper closest to the player.
+    //---------------------------------------------------------
     func nextJumpTarget(
         from current: SCNNode,
         toward player: SCNNode
     ) -> SCNNode? {
 
-        let maxJump: Float = 2.2
+        let maxJump: Float = 2.4
+
+        let currentPos = current.presentation.worldPosition
+        let playerPos = player.presentation.worldPosition
 
         let cubes = activeCubeNodes()
 
@@ -1451,17 +1428,19 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         for cube in cubes {
 
-            let dx = cube.position.x - current.position.x
-            let dy = cube.position.y - current.position.y
+            let cubePos = cube.presentation.worldPosition
+
+            let dx = cubePos.x - currentPos.x
+            let dy = cubePos.y - currentPos.y
 
             let distance = sqrt(dx*dx + dy*dy)
 
-            guard distance <= maxJump else { continue }
+            guard distance <= maxJump, distance > 0.05 else { continue }
 
             // score = distance from this cube to player
             let score = distanceBetween(
-                cube.position,
-                player.position
+                cubePos,
+                playerPos
             )
 
             if score < bestScore {
@@ -1484,7 +1463,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     func spawnPointObject(at worldPosition: SCNVector3) {
 
-        let geo = SCNSphere(radius: 0.25)
+        let geo = SCNSphere(radius: 0.22)
         geo.firstMaterial?.diffuse.contents = UIColor.systemOrange
         geo.firstMaterial?.emission.contents =
             UIColor.systemOrange.withAlphaComponent(0.45)
@@ -1494,8 +1473,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             geometry: geo
         )
 
-        // IMPORTANT:
-        // convert world position to scene coordinates
         node.position = worldPosition
 
         let body = SCNPhysicsBody(
@@ -1513,12 +1490,10 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             PhysicsCategory.laser
 
         body.collisionBitMask =
-            PhysicsCategory.ground
+            PhysicsCategory.none
 
-        // Enable physics movement
-        body.isAffectedByGravity = true
+        body.isAffectedByGravity = false
 
-        // Add downward force because world gravity is zero
         body.velocity = SCNVector3(
             0,
             -3.0,
@@ -1533,6 +1508,34 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         enemyRoot.addChildNode(node)
     }
 
+    func spawnBonusPointObject(at worldPosition: SCNVector3) {
+        let size = cubeSize * 1.2
+        let plane = makeLabelBillboard(text: "$$$", color: .yellow, worldSize: size)
+        let node = EntityNode(kind: .bonusPointObject, geometry: plane)
+        node.name = "$$$"
+        node.position = worldPosition
+        node.renderingOrder = 100
+
+        let body = SCNPhysicsBody(
+            type: .dynamic,
+            shape: labelPhysicsShape(size: size)
+        )
+
+        body.categoryBitMask = PhysicsCategory.pointObject
+        body.contactTestBitMask = PhysicsCategory.ground | PhysicsCategory.laser
+        body.collisionBitMask = PhysicsCategory.none
+        body.isAffectedByGravity = false
+        body.velocity = SCNVector3(0, -2.2, 0)
+        body.damping = 0.2
+        body.angularDamping = 0.5
+
+        node.physicsBody = body
+        let billboard = SCNBillboardConstraint()
+        billboard.freeAxes = .all
+        node.constraints = [billboard]
+
+        enemyRoot.addChildNode(node)
+    }
     func spawnExplosion(at position: SCNVector3, color: UIColor) {
         let ps = SCNParticleSystem()
         ps.birthRate = 220
@@ -1557,22 +1560,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         let scoreFactor = min(Double(gameState.score) / 120.0, 1.0)
         return max(0.08, 1.6 - (1.2 * scoreFactor))
     }
-    func moveLasers(dt: TimeInterval) {
-        guard scene != nil else { return }
 
-        let laserNodes: [SCNNode] = scene.rootNode.childNodes(passingTest: { (node: SCNNode, _: UnsafeMutablePointer<ObjCBool>) -> Bool in
-            node.name == "laserBolt"
-        })
-
-        for node in laserNodes {
-            let speed : Double = 18
-            node.position.y += Float(speed * dt)
-
-            if node.position.y > 20 {
-                node.removeFromParentNode()
-            }
-        }
-    }
     func fireLaser() {
 
         if gameState.isGameOver { return }
@@ -1627,65 +1615,18 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         scene.rootNode.addChildNode(bolt)
 
         activeLasers.append(bolt)
+
+        playSound(GameSound.laserFire.rawValue)
     }
     func laserWorldPosition() -> SCNVector3 {
         let pitch = Float(cubeSize + cubeSpacing)
         let x = -Float(gridWidth) * pitch / 2 + Float(laserColumn) * pitch + pitch / 2
         return SCNVector3(x, groundY + 0.6, wallZ)
     }
+
     //---------------------------------------------------------
-    // Find the nearest cube the grasshopper can jump to
-    //---------------------------------------------------------
-    //---------------------------------------------------------
-    // Choose the best cube toward the player
-    //---------------------------------------------------------
-    func nearestReachableCube(
-        from position: SCNVector3,
-        maxDistance: Float
-    ) -> SCNNode? {
-
-        guard let player = playerNode else { return nil }
-
-        var bestCube: SCNNode?
-        var bestScore = Float.greatestFiniteMagnitude
-
-        for cube in activeCubeNodes() {
-
-            let cubePos = cube.presentation.worldPosition
-
-            let landingPoint = SCNVector3(
-                cubePos.x,
-                cubePos.y + Float(cubeSize) * 0.6,
-                cubePos.z
-            )
-
-            // Can the grasshopper reach this cube?
-            let jumpDistance = distanceBetween(
-                position,
-                landingPoint
-            )
-
-            guard jumpDistance <= maxDistance else {
-                continue
-            }
-
-            // How close would this cube put us to the player?
-            let playerDistance = distanceBetween(
-                landingPoint,
-                player.presentation.worldPosition
-            )
-
-            if playerDistance < bestScore {
-
-                bestScore = playerDistance
-                bestCube = cube
-            }
-        }
-
-        return bestCube
-    }
-    //---------------------------------------------------------
-    // Grasshopper falls to the ground and disappears
+    // Grasshopper falls to the ground and disappears when no
+    // reachable cube exists, per spec.
     //---------------------------------------------------------
     func fallToGround(_ grasshopper: SCNNode) {
 
@@ -1704,11 +1645,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         let impact = SCNAction.run { [weak self] node in
             guard let self = self else { return }
-
-            /*self.spawnExplosion(
-                at: node.position,
-                color: .brown
-            )*/
+            self.spawnExplosion(at: node.position, color: .brown)
         }
 
         let remove = SCNAction.removeFromParentNode()
@@ -1733,72 +1670,85 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             near.z + (far.z - near.z) * t
         )
     }
+
+    //---------------------------------------------------------
+    // GRASSHOPPER AI
+    // Jumps from cube to cube toward the player. If the player is
+    // within direct leap range it jumps straight at them. If no
+    // cube is in jump range, it leaps and falls to its death.
+    //---------------------------------------------------------
     func updateGrasshopper(_ grasshopper: SCNNode) {
 
         let id = ObjectIdentifier(grasshopper)
 
-        // Already jumping
         if grasshopperJumping.contains(id) {
             return
         }
 
-
         guard let player = playerNode else {
             return
         }
-
 
         let playerDistance = distanceBetween(
             grasshopper.presentation.worldPosition,
             player.presentation.worldPosition
         )
 
-
-        let jumpDistance: Float = 4.0
-
+        let directLeapDistance: Float = 1.8
 
         grasshopperJumping.insert(id)
 
-
         //--------------------------------------------------
-        // PLAYER IS REACHABLE
+        // PLAYER IS DIRECTLY REACHABLE
         //--------------------------------------------------
 
-        if playerDistance < jumpDistance {
+        if playerDistance < directLeapDistance {
 
             arcJump(
                 grasshopper: grasshopper,
                 target: player.presentation.worldPosition
-            )
+            ) { [weak self] in
+                guard let self = self else { return }
+                self.grasshopperJumping.remove(id)
+                self.checkGrasshopperLanding(grasshopper)
+            }
 
             return
         }
 
 
         //--------------------------------------------------
-        // OTHERWISE MOVE ACROSS FIELD
+        // HOP TO THE BEST REACHABLE CUBE
         //--------------------------------------------------
 
-        let current = grasshopper.presentation.position
+        if let targetCube = nextJumpTarget(from: grasshopper, toward: player) {
+
+            let cubePos = targetCube.presentation.worldPosition
+            let landing = SCNVector3(
+                cubePos.x,
+                cubePos.y + Float(cubeSize) * 0.6,
+                cubePos.z
+            )
+
+            arcJump(
+                grasshopper: grasshopper,
+                target: landing
+            ) { [weak self] in
+                self?.grasshopperJumping.remove(id)
+            }
+
+            return
+        }
 
 
-        let nextX =
-            current.x +
-            grasshopperDirection * 1.5
+        //--------------------------------------------------
+        // NO REACHABLE CUBE -> LEAP AND FALL
+        //--------------------------------------------------
 
-
-        let target = SCNVector3(
-            nextX,
-            current.y,
-            current.z
-        )
-
-
-        arcJump(
-            grasshopper: grasshopper,
-            target: target
-        )
+        grasshopperJumping.remove(id)
+        fallToGround(grasshopper)
     }
+
     func checkGrasshopperLanding(
         _ grasshopper: SCNNode
     ) {
@@ -1815,27 +1765,13 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
 
         if distance < 0.45 {
-
-            gameState.isGameOver = true
-
-            spawnExplosion(
-                at: player.position,
-                color: .red
-            )
-
-            return
+            triggerGameOverFromEnemyContact(node: grasshopper, at: player.position)
         }
-
-
-        //--------------------------------------------------
-        // Bounce direction after landing
-        //--------------------------------------------------
-
-        grasshopperDirection *= -1
     }
     func arcJump(
         grasshopper: SCNNode,
-        target: SCNVector3
+        target: SCNVector3,
+        completion: (() -> Void)? = nil
     ) {
 
         let start =
@@ -1868,22 +1804,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         moveDown.timingMode = .easeIn
 
 
-        let finish = SCNAction.run {
-            [weak self, weak grasshopper] _ in
-
-            guard let self,
-                  let grasshopper
-            else { return }
-
-
-            self.grasshopperJumping.remove(
-                ObjectIdentifier(grasshopper)
-            )
-
-
-            self.checkGrasshopperLanding(
-                grasshopper
-            )
+        let finish = SCNAction.run { _ in
+            completion?()
         }
 
 
@@ -1895,76 +1817,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             ])
         )
     }
-    //---------------------------------------------------------
-    // Grasshopper jumps directly to the player
-    //---------------------------------------------------------
-    func jumpToPlayer(_ grasshopper: SCNNode) {
 
-        guard let player = playerNode else { return }
-
-        let start = grasshopper.presentation.position
-        let end = player.presentation.position
-
-        let peakHeight: Float = 1.5
-
-        let mid = SCNVector3(
-            (start.x + end.x) * 0.5,
-            max(start.y, end.y) + peakHeight,
-            (start.z + end.z) * 0.5
-        )
-
-
-        //--------------------------------------------------
-        // Three point jump arc
-        //--------------------------------------------------
-
-        let rise = SCNAction.move(
-            to: mid,
-            duration: 0.25
-        )
-
-        rise.timingMode = .easeOut
-
-
-        let descend = SCNAction.move(
-            to: end,
-            duration: 0.30
-        )
-
-        descend.timingMode = .easeIn
-
-
-        let jump = SCNAction.sequence([
-            rise,
-            descend
-        ])
-
-
-        grasshopper.runAction(jump) { [weak self, weak grasshopper] in
-
-            guard let self = self,
-                  let grasshopper = grasshopper else {
-                return
-            }
-
-
-            let distance = self.distanceBetween(
-                grasshopper.presentation.position,
-                player.presentation.position
-            )
-
-
-            if distance < 0.35 {
-
-                self.gameState.isGameOver = true
-
-            } else {
-
-                self.updateGrasshopper(grasshopper)
-
-            }
-        }
-    }
     func updateDifficulty() {
         let s = Double(gameState.score)
         gameState.difficulty = min(5.0, 1.0 + s / 250.0)
@@ -2029,27 +1882,23 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             $0.parent == nil
         }
     }
+
+    //--------------------------------------------------
+    // Cleanup pass for entities whose movement is driven elsewhere
+    // (SCNActions for missile/UFO, dedicated AI functions for
+    // grasshopper/centipede/spider/ladybug). This just removes
+    // anything that fell out of the arena without triggering its
+    // normal removal path.
+    //--------------------------------------------------
     func updateEntities(dt: TimeInterval) {
         scene.rootNode.enumerateChildNodes { node, _ in
             guard let kind = self.kind(of: node) else { return }
 
             switch kind {
-            case .pointObject:
+            case .pointObject, .bonusPointObject:
                 if node.position.y < self.groundY - 6 {
                     node.removeFromParentNode()
                 }
-
-            case .ufo:
-                node.position.x += Float(dt) * 1.0 * Float(self.gameState.difficulty)
-
-            case .missile:
-                node.position.y -= Float(dt) * 3.5 * Float(self.gameState.difficulty)
-
-            case .spider:
-                node.position.y -= Float(dt) * 0.5 * Float(self.gameState.difficulty)
-
-            case .ladybug:
-                node.position.y -= Float(dt) * 0.2 * Float(self.gameState.difficulty)
 
             default:
                 break
@@ -2063,7 +1912,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         geo.firstMaterial?.emission.contents = UIColor.systemRed
 
         let missile = EntityNode(kind: .missile, geometry: geo)
-        missile.position = ufo.position
+        missile.position = ufo.presentation.worldPosition
         missile.position.y -= 0.6
 
         let body = SCNPhysicsBody(type: .kinematic, shape: SCNPhysicsShape(geometry: geo, options: nil))
@@ -2077,26 +1926,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             .moveBy(x: 0, y: -12, z: 0, duration: 2.0 / gameState.difficulty),
             .removeFromParentNode()
         ]))
-    }
-
-    func spawnHitBurst(at position: SCNVector3, color: UIColor) {
-        let ps = SCNParticleSystem()
-        ps.birthRate = 280
-        ps.emissionDuration = 0.05
-        ps.particleLifeSpan = 0.45
-        ps.particleSize = 0.028
-        ps.particleColor = color
-        ps.spreadingAngle = 160
-        ps.particleVelocity = 1.8
-        ps.particleVelocityVariation = 1.3
-        ps.acceleration = SCNVector3(0, -2.5, 0)
-        ps.blendMode = .additive
-
-        let emitter = SCNNode()
-        emitter.position = position
-        scene.rootNode.addChildNode(emitter)
-        emitter.addParticleSystem(ps)
-        emitter.runAction(.sequence([.wait(duration: 1.0), .removeFromParentNode()]))
     }
 
     func spawnSlashShockwave(at position: SCNVector3, color: UIColor) {
@@ -2176,6 +2005,56 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         }
     }
 
+    private func drawLabelImage(text: String, size: CGSize, color: UIColor, bgColor: UIColor = .clear) -> UIImage {
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { ctx in
+            let rect = CGRect(origin: .zero, size: size)
+            bgColor.setFill()
+            ctx.fill(rect)
+
+            let fontSize = min(size.width, size.height) * 0.8
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = .center
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: UIFont.boldSystemFont(ofSize: fontSize),
+                .foregroundColor: color,
+                .paragraphStyle: paragraph
+            ]
+            let attributed = NSAttributedString(string: text, attributes: attrs)
+            let textSize = attributed.size()
+            let drawRect = CGRect(
+                x: (size.width - textSize.width) * 0.5,
+                y: (size.height - textSize.height) * 0.5,
+                width: textSize.width,
+                height: textSize.height
+            )
+            attributed.draw(in: drawRect)
+        }
+    }
+
+    private func makeLabelBillboard(text: String, color: UIColor, worldSize: CGFloat) -> SCNPlane {
+        let plane = SCNPlane(width: worldSize, height: worldSize)
+        let img = drawLabelImage(text: text, size: CGSize(width: 384, height: 384), color: color)
+
+        let mat = SCNMaterial()
+        mat.diffuse.contents = img
+        mat.emission.contents = UIColor.white
+        mat.lightingModel = .constant
+        mat.blendMode = .alpha
+        mat.isDoubleSided = true
+        mat.readsFromDepthBuffer = true
+        mat.writesToDepthBuffer = false
+
+        plane.materials = [mat]
+        return plane
+    }
+
+    private func labelPhysicsShape(size: CGFloat) -> SCNPhysicsShape {
+        let thickness = max(0.01, size * 0.05)
+        let box = SCNBox(width: size, height: size, length: thickness, chamferRadius: 0)
+        return SCNPhysicsShape(geometry: box, options: nil)
+    }
+
     func allTargetNodes() -> [SCNNode] {
         var nodes: [SCNNode] = []
         scene.rootNode.enumerateChildNodes { node, _ in
@@ -2200,6 +2079,26 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         return nil
     }
+
+    //--------------------------------------------------
+    // Shared game-over trigger for any hostile entity that
+    // physically reaches the player (spider, centipede, grasshopper).
+    // Guarded against double-firing.
+    //--------------------------------------------------
+    func triggerGameOverFromEnemyContact(node: SCNNode, at point: SCNVector3) {
+        guard !gameState.isGameOver else { return }
+
+        if let k = kind(of: node) {
+            cleanupTrackingState(for: node, kind: k)
+        }
+
+        gameState.isGameOver = true
+        spawnExplosion(at: point, color: .red)
+        playSound(GameSound.gameOver.rawValue)
+
+        node.removeFromParentNode()
+    }
+
     func physicsWorld(
         _ world: SCNPhysicsWorld,
         didBegin contact: SCNPhysicsContact
@@ -2220,7 +2119,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         //--------------------------------------------------
         // PLAYER LASER HITS OBJECT
-        // ONLY PLAYER LASER DESTROYS CUBES
         //--------------------------------------------------
 
         let isLaserA =
@@ -2230,8 +2128,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             categoryB == PhysicsCategory.laser
 
 
-        if isLaserA,
-           let targetKind = kindB {
+        if isLaserA, kindB != nil {
 
             resolveHit(
                 attacker: .playerLaser,
@@ -2248,8 +2145,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         }
 
 
-        if isLaserB,
-           let targetKind = kindA {
+        if isLaserB, kindA != nil {
 
             resolveHit(
                 attacker: .playerLaser,
@@ -2276,142 +2172,91 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             categoryB == PhysicsCategory.missile
 
         if isMissileA && categoryB == PhysicsCategory.cube {
+            spawnExplosion(at: contact.contactPoint, color: .systemRed)
             a.removeFromParentNode()
             return
         }
 
         if isMissileB && categoryA == PhysicsCategory.cube {
+            spawnExplosion(at: contact.contactPoint, color: .systemRed)
             b.removeFromParentNode()
             return
         }
 
 
         //--------------------------------------------------
-        // MISSILE HITS PLAYER ONLY
-        // NO MISSILE-CUBE DETECTION
+        // MISSILE HITS PLAYER -> GAME OVER
         //--------------------------------------------------
 
+        /*
+        if isMissileA && categoryB == PhysicsCategory.player {
 
-        if isMissileA &&
-           categoryB == PhysicsCategory.player {
-
-            gameState.isGameOver = true
-            /*
-            spawnExplosion(
-                at: contact.contactPoint,
-                color: .red
-            )
-             */
+            if !gameState.isGameOver {
+                gameState.isGameOver = true
+                spawnExplosion(at: contact.contactPoint, color: .red)
+                playSound(GameSound.gameOver.rawValue)
+            }
 
             a.removeFromParentNode()
-
             return
         }
+       
 
+        if isMissileB && categoryA == PhysicsCategory.player {
 
-        if isMissileB &&
-           categoryA == PhysicsCategory.player {
+            if !gameState.isGameOver {
+                gameState.isGameOver = true
+                spawnExplosion(at: contact.contactPoint, color: .red)
+                playSound(GameSound.gameOver.rawValue)
+            }
 
-            gameState.isGameOver = true
-            /*
-            spawnExplosion(
-                at: contact.contactPoint,
-                color: .red
-            )
-             */
             b.removeFromParentNode()
+            return
+        }
+         */
 
+        //--------------------------------------------------
+        // SPIDER / CENTIPEDE / GRASSHOPPER TOUCHES PLAYER -> GAME OVER
+        //--------------------------------------------------
+
+        /*
+        let dangerousCategories =
+            PhysicsCategory.spider |
+            PhysicsCategory.centipede |
+            PhysicsCategory.grasshopper
+
+        if (categoryA & dangerousCategories) != 0 && categoryB == PhysicsCategory.player {
+            triggerGameOverFromEnemyContact(node: a, at: contact.contactPoint)
             return
         }
 
-
+        if (categoryB & dangerousCategories) != 0 && categoryA == PhysicsCategory.player {
+            triggerGameOverFromEnemyContact(node: b, at: contact.contactPoint)
+            return
+        }
+*/
 
         //--------------------------------------------------
-        // POINT OBJECT HITS GROUND
+        // POINT / BONUS OBJECT HITS GROUND
         //--------------------------------------------------
 
-        if categoryA == PhysicsCategory.pointObject &&
+        if let kA = kindA, (kA == .pointObject || kA == .bonusPointObject),
            categoryB == PhysicsCategory.ground {
 
             a.removeFromParentNode()
-
             return
         }
 
 
-        if categoryB == PhysicsCategory.pointObject &&
+        if let kB = kindB, (kB == .pointObject || kB == .bonusPointObject),
            categoryA == PhysicsCategory.ground {
 
             b.removeFromParentNode()
-
             return
         }
     }
-    func renderer(
-        _ renderer: SCNSceneRenderer,
-        updateAtTime time: TimeInterval
-    ) {
-
-        let dt =
-            lastUpdateTime == 0
-            ? 0
-            : time - lastUpdateTime
-
-        lastUpdateTime = time
-
-
-        if gameState.isGameOver {
-            return
-        }
-
-
-        //--------------------------------------------------
-        // GAME DIFFICULTY
-        //--------------------------------------------------
-
-        updateDifficulty()
-
-
-
-        //--------------------------------------------------
-        // RESPAWN CUBES IF NEEDED
-        //--------------------------------------------------
-
-        if allCubesGone() {
-
-            respawnAllCubes()
-
-        }
-
-
-
-        //--------------------------------------------------
-        // AUTO FIRE PLAYER LASER
-        //--------------------------------------------------
-
-        if autoFireEnabled,
-           time - lastAutoFireTime >= autoFireInterval {
-
-            lastAutoFireTime = time
-
-            fireLaser()
-        }
-
-
-
-        //--------------------------------------------------
-        // SPAWN UFO
-        //--------------------------------------------------
-
-        if time - lastFireTime >
-            max(0.6, 2.5 / gameState.difficulty) {
-
-            lastFireTime = time
-
-            spawnUFOIfNeeded()
-        }
-
-
+    func updateGrid(dt: TimeInterval) {
+        let delta = Float(dt)
 
         //--------------------------------------------------
         // MOVE CUBE GRID
@@ -2422,15 +2267,11 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             gridSpeed *
             Float(dt)
 
-
         gridRoot.position.x = gridOffset
-
-
 
         if abs(gridOffset) >= gridMaxOffset {
 
             gridDirection *= -1
-
 
             gridOffset =
                 max(
@@ -2438,105 +2279,339 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
                     -gridMaxOffset
                 )
 
-
             gridRoot.position.y -= 0.5
-
 
             if gridRoot.position.y <= -4.5 {
 
-                gameState.isGameOver = true
+                if !gameState.isGameOver {
+                    gameState.isGameOver = true
+                    playSound(GameSound.gameOver.rawValue)
+                }
             }
         }
 
+        if allCubesGone() {
+            respawnAllCubes()
+        }
+    }
+    func updateGrasshoppers(dt: TimeInterval) {
+        scene.rootNode.enumerateChildNodes { node, _ in
+            guard let entity = node as? EntityNode, entity.kind == .grasshopper else { return }
+            updateGrasshopper(node)
+        }
+    }
+    func updateCentipedes(dt: TimeInterval) {
+        scene.rootNode.enumerateChildNodes { node, _ in
+            guard let entity = node as? EntityNode else { return }
+            switch entity.kind {
+            case .centipedeHead, .centipedeSegment:
+                updateCentipedeSegment(node, dt: dt)
+            default:
+                break
+            }
+        }
+    }
+    func updateCentipedeSegment(_ node: SCNNode, dt: TimeInterval) {
+        let id = ObjectIdentifier(node)
+        if centipedeDropping.contains(id) { return }
 
+        if let target = centipedeFollowTarget[id] {
+            if target.parent == nil {
+                centipedeFollowTarget.removeValue(forKey: id)
+            } else {
+                let targetPos = target.presentation.worldPosition
+                let currentPos = node.presentation.worldPosition
 
-        //--------------------------------------------------
-        // GRASSHOPPER AI
-        //--------------------------------------------------
+                let dx = targetPos.x - currentPos.x
+                let dy = targetPos.y - currentPos.y
+                let dist = sqrt(dx * dx + dy * dy)
+
+                if dist > centipedeTrailSpacing {
+                    let move: Float = min(2.0 * Float(dt), dist - centipedeTrailSpacing)
+                    let nx = dx / dist
+                    let ny = dy / dist
+                    node.position.x += nx * move
+                    node.position.y += ny * move
+                    return
+                }
+            }
+        }
+
+        let direction = centipedeDirection[id] ?? 1.0
+        let speed: Float = 1.1 * Float(gameState.difficulty)
+        let step = direction * speed * Float(dt)
+
+        let current = node.position
+        let next = SCNVector3(current.x + step, current.y, current.z)
+
+        let pitch = Float(cubeSize + cubeSpacing)
+        let halfWidth = Float(gridWidth) * pitch / 2
+        let hitsEdge = next.x > halfWidth - pitch / 2 || next.x < -halfWidth + pitch / 2
+
+        if hitsEdge || isCentipedePathBlocked(at: next, excluding: node) {
+            centipedeDirection[id] = -direction
+            dropCentipedeRow(node)
+        } else {
+            node.position = next
+        }
+    }
+    func updateUFOs(dt: TimeInterval) {
+        scene.rootNode.enumerateChildNodes { node, _ in
+            guard let entity = node as? EntityNode, entity.kind == .ufo else { return }
+            updateUFO(node, dt: dt)
+        }
+    }
+    func updateUFO(_ ufo: SCNNode, dt: TimeInterval) {
+        let speed: Float = 2.0 * Float(gameState.difficulty)
+        let bounds: Float = Float(gridWidth) * Float(cubeSize + cubeSpacing) * 0.5 + Float(2.0)
+
+        var pos = ufo.position
+        pos.x += ufo.name == "ufoLeft" ? -speed * Float(dt) : speed * Float(dt)
+
+        if pos.x > bounds {
+            pos.x = bounds
+            ufo.scale.x = -1
+            fireMissile(from: ufo)
+        } else if pos.x < -bounds {
+            pos.x = -bounds
+            ufo.scale.x = 1
+            fireMissile(from: ufo)
+        }
+
+        ufo.position = pos
+    }
+    func updateLadybugs(dt: TimeInterval) {
+        scene.rootNode.enumerateChildNodes { node, _ in
+            guard let entity = node as? EntityNode, entity.kind == .ladybug else { return }
+            updateLadybugMovement(node, dt: dt)
+        }
+    }
+    func updateSpiders(dt: TimeInterval) {
+        scene.rootNode.enumerateChildNodes { node, _ in
+            guard let entity = node as? EntityNode, entity.kind == .spider else { return }
+            updateSpider(node, dt: dt)
+        }
+    }
+    func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+        let dt = lastUpdateTime == 0 ? 0 : time - lastUpdateTime
+        lastUpdateTime = time
+        guard dt > 0, !gameState.isGameOver else { return }
+
+        //updateDifficulty()
+        //if allCubesGone() { respawnAllCubes() }
+        
+        updateGrid(dt: dt)
+
+        gridOffset += gridDirection * gridSpeed * Float(dt)
+        gridRoot.position.x = gridOffset
 
         scene.rootNode.enumerateChildNodes { node, _ in
-
-            guard let entity = node as? EntityNode else {
-                return
-            }
-
-
-            if entity.kind == .grasshopper {
-
+            guard let entity = node as? EntityNode else { return }
+            switch entity.kind {
+            case .grasshopper:
                 self.updateGrasshopper(entity)
+            case .centipedeHead, .centipedeSegment:
+                self.updateCentipedeSegment(entity, dt: dt)
+            case .spider:
+                self.updateSpider(entity, dt: dt)
+            case .ladybug:
+                self.updateLadybugMovement(entity, dt: dt)
+            default:
+                break
             }
         }
 
-
-
-        //--------------------------------------------------
-        // OTHER ENTITY MOVEMENT
-        //--------------------------------------------------
-
         updateEntities(dt: dt)
-
-
-
-        //--------------------------------------------------
-        // LASER MOVEMENT
-        //--------------------------------------------------
-
         updateLasers(dt: dt)
+
+        if autoFireEnabled, time - lastAutoFireTime >= autoFireInterval {
+            fireLaser()
+            lastAutoFireTime = time
+        }
+
+        if time - lastFireTime > max(0.6, 2.5 / gameState.difficulty) {
+            lastFireTime = time
+            spawnUFOIfNeeded()
+        }
     }
-    func spawnGrasshopper() {
 
-        let geo = SCNSphere(radius: 0.25)
+    //---------------------------------------------------------
+    // CENTIPEDE AI
+    // Crawls sideways; when blocked by a cube, mushroom, or the
+    // arena edge it reverses direction and drops down one row.
+    // Destroyed segments become mushrooms (handled in destroy()).
+    //---------------------------------------------------------
 
-        geo.firstMaterial?.diffuse.contents = UIColor.green
-        geo.firstMaterial?.emission.contents = UIColor.green
+    func isCentipedePathBlocked(at position: SCNVector3, excluding node: SCNNode) -> Bool {
+        let threshold = Float(cubeSize) * 0.9
 
+        for cube in activeCubeNodes() {
+            if distanceBetween(cube.presentation.worldPosition, position) < threshold {
+                return true
+            }
+        }
 
-        let grasshopper = EntityNode(
-            kind: .grasshopper,
-            geometry: geo
-        )
+        var blocked = false
+        enemyRoot.enumerateChildNodes { candidate, stop in
+            guard candidate != node,
+                  let k = self.kind(of: candidate),
+                  k == .mushroom else { return }
 
+            if self.distanceBetween(candidate.presentation.worldPosition, position) < threshold {
+                blocked = true
+                stop.pointee = true
+            }
+        }
+        return blocked
+    }
 
-        grasshopper.name = "grasshopper"
+    func dropCentipedeRow(_ node: SCNNode) {
+        let id = ObjectIdentifier(node)
+        guard !centipedeDropping.contains(id) else { return }
+        centipedeDropping.insert(id)
 
+        let pitch = Float(cubeSize + cubeSpacing)
 
-        grasshopper.position = SCNVector3(
-            0,
-            groundY + 5,
-            0
-        )
+        let drop = SCNAction.moveBy(x: 0, y: CGFloat(-pitch), z: 0, duration: 0.2)
+        drop.timingMode = .easeInEaseOut
 
+        let finish = SCNAction.run { [weak self, weak node] _ in
+            guard let self = self, let node = node else { return }
+            self.centipedeDropping.remove(ObjectIdentifier(node))
+            self.checkCentipedeReachedBottom(node)
+        }
 
-        let body = SCNPhysicsBody(
-            type: .kinematic,
-            shape: SCNPhysicsShape(
-                geometry: geo,
-                options: nil
+        node.runAction(.sequence([drop, finish]))
+    }
+
+    func checkCentipedeReachedBottom(_ node: SCNNode) {
+        guard let player = playerNode else { return }
+
+        // If it's dropped below the player's row, send it back upward and reverse
+        if node.presentation.worldPosition.y <= player.presentation.worldPosition.y + 0.6 {
+            let riseBack = SCNAction.moveBy(
+                x: 0,
+                y: CGFloat(Float(gridHeight) * Float(cubeSize + cubeSpacing)),
+                z: 0,
+                duration: 0.5
             )
-        )
-
-
-        body.categoryBitMask =
-            PhysicsCategory.grasshopper
-
-
-        body.contactTestBitMask =
-            PhysicsCategory.cube |
-            PhysicsCategory.player |
-            PhysicsCategory.laser
-
-
-        body.collisionBitMask =
-            PhysicsCategory.cube
-
-
-        grasshopper.physicsBody = body
-
-
-        enemyRoot.addChildNode(
-            grasshopper
-        )
+            node.runAction(riseBack)
+        }
     }
+
+    //---------------------------------------------------------
+    // SPIDER AI
+    // Descends slowly on a visible thread from the opening it
+    // entered through. Removed if it reaches the ground without
+    // hitting the player; ends the game on player contact
+    // (handled in physicsWorld / triggerGameOverFromEnemyContact).
+    //---------------------------------------------------------
+
+    func updateSpider(_ node: SCNNode, dt: TimeInterval) {
+        let speed: Float = 0.55 * Float(gameState.difficulty)
+        node.position.y -= speed * Float(dt)
+
+        updateSpiderThread(for: node)
+
+        if node.position.y < groundY - 1 {
+            removeSpiderThread(for: node)
+            node.removeFromParentNode()
+        }
+    }
+
+    func updateSpiderThread(for spider: SCNNode) {
+        let id = ObjectIdentifier(spider)
+        guard let anchorY = spiderAnchorY[id] else { return }
+
+        let current = spider.presentation.worldPosition
+        let length = max(0.02, anchorY - current.y)
+
+        let thread: SCNNode
+        if let existing = spiderThreads[id] {
+            thread = existing
+        } else {
+            let cyl = SCNCylinder(radius: 0.012, height: 1)
+            cyl.firstMaterial?.diffuse.contents = UIColor.white.withAlphaComponent(0.5)
+            cyl.firstMaterial?.emission.contents = UIColor.white.withAlphaComponent(0.3)
+            cyl.firstMaterial?.lightingModel = .constant
+            thread = SCNNode(geometry: cyl)
+            effectsRoot.addChildNode(thread)
+            spiderThreads[id] = thread
+        }
+
+        thread.scale = SCNVector3(1, length, 1)
+        thread.position = SCNVector3(current.x, anchorY - length / 2, current.z)
+    }
+
+    func removeSpiderThread(for spider: SCNNode) {
+        let id = ObjectIdentifier(spider)
+        spiderThreads[id]?.removeFromParentNode()
+        spiderThreads.removeValue(forKey: id)
+        spiderAnchorY.removeValue(forKey: id)
+    }
+
+    //---------------------------------------------------------
+    // LADYBUG AI
+    // Descends gradually while drifting side to side, bouncing
+    // off the arena edges. Non-lethal, high-value target.
+    //---------------------------------------------------------
+
+    func updateLadybugMovement(_ node: SCNNode, dt: TimeInterval) {
+        let id = ObjectIdentifier(node)
+
+        var dir = ladybugDirection[id]
+        if dir == nil {
+            dir = Bool.random() ? 1.0 : -1.0
+        }
+
+        let descendSpeed: Float = 0.22 * Float(gameState.difficulty)
+        let driftSpeed: Float = 0.5
+
+        var pos = node.position
+        pos.y -= descendSpeed * Float(dt)
+        pos.x += dir! * driftSpeed * Float(dt)
+
+        let pitch = Float(cubeSize + cubeSpacing)
+        let halfWidth = Float(gridWidth) * pitch / 2
+
+        if pos.x > halfWidth {
+            dir = -1.0
+        } else if pos.x < -halfWidth {
+            dir = 1.0
+        }
+
+        ladybugDirection[id] = dir
+        node.position = pos
+
+        if pos.y < groundY - 1 {
+            ladybugDirection.removeValue(forKey: id)
+            node.removeFromParentNode()
+        }
+    }
+
+    func spawnGrasshopper() {
+        let size = cubeSize * 1.2
+        let plane = makeLabelBillboard(text: "H", color: .white, worldSize: size)
+        let grasshopper = EntityNode(kind: .grasshopper, geometry: plane)
+        grasshopper.name = "H"
+        grasshopper.position = SCNVector3(0, groundY + 5, 0)
+        grasshopper.renderingOrder = 100
+        let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
+        body.categoryBitMask = PhysicsCategory.grasshopper
+        body.contactTestBitMask = PhysicsCategory.cube | PhysicsCategory.player | PhysicsCategory.laser
+        body.collisionBitMask = PhysicsCategory.none
+        grasshopper.physicsBody = body
+        let billboard = SCNBillboardConstraint()
+        billboard.freeAxes = .all
+        grasshopper.constraints = [billboard]
+        enemyRoot.addChildNode(grasshopper)
+    }
+
+    //---------------------------------------------------------
+    // UFO AI
+    // Bounces back and forth across the top of the arena, firing
+    // a missile at each turnaround point.
+    //---------------------------------------------------------
     func spawnUFOIfNeeded() {
         let chance = Int.random(in: 0...1000)
         let threshold = max(1, 950 - Int(gameState.difficulty * 120))
@@ -2557,13 +2632,22 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         enemyRoot.addChildNode(ufo)
 
-        let moveRight = SCNAction.moveBy(x: 16, y: 0, z: 0, duration: Double(8.0 / gameState.difficulty))
+        let travelDuration = Double(8.0 / gameState.difficulty)
+
+        let moveRight = SCNAction.moveBy(x: 16, y: 0, z: 0, duration: travelDuration)
+        let moveLeft = SCNAction.moveBy(x: -16, y: 0, z: 0, duration: travelDuration)
+
         let fire = SCNAction.run { [weak self, weak ufo] _ in
-            guard let self, let ufo else { return }
+            guard let self = self, let ufo = ufo else { return }
             self.fireMissile(from: ufo)
         }
-        let seq = SCNAction.sequence([moveRight, .wait(duration: 0.5), fire, .wait(duration: 0.5)])
-        ufo.runAction(.repeatForever(seq))
+
+        let cycle = SCNAction.sequence([
+            moveRight, .wait(duration: 0.4), fire, .wait(duration: 0.4),
+            moveLeft, .wait(duration: 0.4), fire, .wait(duration: 0.4)
+        ])
+
+        ufo.runAction(.repeatForever(cycle))
     }
 
     func restartGame() {
@@ -2629,6 +2713,19 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
 
         //--------------------------------------------------
+        // Reset AI tracking state
+        //--------------------------------------------------
+
+        grasshopperJumping.removeAll()
+        centipedeDirection.removeAll()
+        centipedeDropping.removeAll()
+        spiderThreads.removeAll()
+        spiderAnchorY.removeAll()
+        ladybugDirection.removeAll()
+
+
+
+        //--------------------------------------------------
         // Rebuild world
         //--------------------------------------------------
 
@@ -2646,35 +2743,20 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         spawnLadybug()
 
-
-        spawnCentipedeHead()
-
-        spawnCentipedeSegment(
-            at: SCNVector3(
-                -2,
-                groundY + 5,
-                wallZ
-            )
-        )
+        let headNode=spawnCentipedeHead(at: SCNVector3(-3, groundY + 5, 0))
 
         spawnCentipedeSegment(
             at: SCNVector3(
                 -1,
                 groundY + 5,
                 wallZ
-            )
+            ), follow:headNode
         )
     }
     func destroyLaser(
         _ laser: SCNNode,
         at position: SCNVector3
     ) {
-
-        //spawnExplosion(
-        //    at: position,
-       //     color: .cyan
-       // )
-
         laser.physicsBody = nil
         laser.removeFromParentNode()
     }
@@ -2717,7 +2799,7 @@ struct ContentView: View {
 
             VStack {
                 Spacer()
-                Text("Tap to fire • Pan to move laser")
+                Text("Tap to fire • Pan to move laser • Two-finger slash for AoE")
                     .font(.caption2)
                     .foregroundColor(.white.opacity(0.6))
                     .padding(.horizontal, 12)
@@ -2757,4 +2839,3 @@ struct ContentView: View {
         .background(Color.black)
     }
 }
-
