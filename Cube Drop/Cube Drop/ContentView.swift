@@ -477,7 +477,7 @@ final class EntityNode: SCNNode {
     }
 }
 
-final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNPhysicsContactDelegate {
+final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNPhysicsContactDelegate, UIGestureRecognizerDelegate {
     let knowledge = KnowledgeTree()
     var gameState: GameState
 
@@ -998,13 +998,15 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         slotMap[ObjectIdentifier(node)] = (slot.row, slot.col)
     }
 
-    func setupGestures() {
+func setupGestures() {
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         pan.cancelsTouchesInView = false
+        pan.delegate = self
         sceneView.addGestureRecognizer(pan)
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         tap.cancelsTouchesInView = false
+        tap.delegate = self
         tap.require(toFail: pan)
         sceneView.addGestureRecognizer(tap)
 
@@ -1018,12 +1020,17 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         longPress.allowableMovement = 35
         longPress.cancelsTouchesInView = false
         longPress.delaysTouchesBegan = false
+        longPress.delegate = self
         sceneView.addGestureRecognizer(longPress)
 
-        // Prefer long press over tap and pan so continuous fire is reliable
+        // Prefer long press over tap so continuous fire is reliable
         tap.require(toFail: longPress)
-        pan.require(toFail: longPress)
+        // Removed the line: pan.require(toFail: longPress)
     }
+    private func longPressRecognizer() -> UILongPressGestureRecognizer? {
+        return sceneView.gestureRecognizers?.compactMap { $0 as? UILongPressGestureRecognizer }.first
+    }
+    
     @objc func handleTap(_ gesture: UITapGestureRecognizer) {
         guard !gameState.isGameOver else { return }
         let location = gesture.location(in: sceneView)
@@ -2858,6 +2865,17 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     ) {
         laser.physicsBody = nil
         laser.removeFromParentNode()
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        // Allow pan and long press to work together so the player can aim while holding to fire
+        let types: Set<String> = [String(describing: UILongPressGestureRecognizer.self), String(describing: UIPanGestureRecognizer.self)]
+        let g1 = String(describing: type(of: gestureRecognizer))
+        let g2 = String(describing: type(of: otherGestureRecognizer))
+        if types.contains(g1) && types.contains(g2) {
+            return true
+        }
+        return false
     }
 }
 
