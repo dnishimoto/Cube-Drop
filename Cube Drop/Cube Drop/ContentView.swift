@@ -946,9 +946,11 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         return SCNNode(geometry: geometry)
     }
 
-    func loadCube(into slot: inout CubeSlot, animated: Bool) {
+    func loadCube(into slot: inout CubeSlot,
+                  animated: Bool,
+                  dropFromTop: Bool = false) {
+        
         guard slot.node == nil else { return }
-
 
         let cubeGeo = SCNBox(
             width: cubeSize * 0.88,
@@ -966,28 +968,32 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             type: .kinematic,
             shape: SCNPhysicsShape(geometry: cubeGeo, options: nil)
         )
-
         body.categoryBitMask = PhysicsCategory.cube
-
-        body.contactTestBitMask =
-            PhysicsCategory.laser |
-            PhysicsCategory.missile |
-            PhysicsCategory.ground
-
-        body.collisionBitMask =
-            PhysicsCategory.missile |
-            PhysicsCategory.ground
-
+        body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.missile | PhysicsCategory.ground
+        body.collisionBitMask = PhysicsCategory.missile | PhysicsCategory.ground
         node.physicsBody = body
 
-
         if animated {
-            let dropStart = Float(gridHeight - slot.row) * Float(cubeSize + cubeSpacing) + 2.0
-            node.position = SCNVector3(0, dropStart, 0)
+            let dropStartY: Float
+            
+            if dropFromTop {
+                // Start from the TOP of the screen
+                dropStartY = groundY + 18.0 + Float(slot.row) * 1.2   // higher + slight stagger per row
+            } else {
+                // Normal individual cube drop
+                dropStartY = Float(gridHeight - slot.row) * Float(cubeSize + cubeSpacing) + 3.0
+            }
+            
+            node.position = SCNVector3(0, dropStartY, 0)
             slot.container.addChildNode(node)
-            let fall = SCNAction.move(to: SCNVector3(0, 0, 0), duration: 0.35)
+            
+            let fallDuration = dropFromTop ? 0.65 : 0.45
+            
+            let fall = SCNAction.move(to: SCNVector3(0, 0, 0), duration: fallDuration)
             fall.timingMode = .easeIn
+            
             node.runAction(fall)
+            
         } else {
             node.position = SCNVector3Zero
             slot.container.addChildNode(node)
@@ -1939,17 +1945,56 @@ func setupGestures() {
         }
         return true
     }
-
+    private func dropAllCubesFromTop() {
+        for row in 0..<slots.count {
+            for col in 0..<slots[row].count {
+                guard let node = slots[row][col].node else { continue }
+                
+                let startY = node.position.y + 14.0 + Float(row) * 1.2
+                node.position.y = startY
+                
+                let fall = SCNAction.move(to: SCNVector3(0, 0, 0), duration: 0.55)
+                fall.timingMode = .easeOut
+                node.runAction(fall)
+            }
+        }
+    }
     func respawnAllCubes() {
+        // === IMPORTANT: Reset grid position and offset ===
+        gridRoot.position = SCNVector3Zero      // Reset vertical descent
+        gridOffset = 0.0
+        gridDirection = 1.0                     // Reset direction to right
+        
+        // Clear all existing cubes
         for row in 0..<slots.count {
             for col in 0..<slots[row].count {
                 if let current = slots[row][col].node {
                     current.removeFromParentNode()
                 }
+                // Reset slot state
+                slots[row][col].node = nil
+                slots[row][col].isRespawning = false
+            }
+        }
+        
+        slotMap.removeAll()
+        
+        // Rebuild the grid at the ORIGINAL starting height
+        let pitch = cubeSize + cubeSpacing
+        let totalWidth = CGFloat(gridWidth) * pitch
+        let originX = -Float(totalWidth) / 2 + Float(pitch) / 2
+        let originY = groundY + 3.0                     // ← Original Y position
+        
+        for row in 0..<gridHeight {
+            for col in 0..<gridWidth {
+                let x = originX + Float(col) * Float(pitch)
+                let y = originY + Float(row) * Float(pitch)
+                
+                let container = slots[row][col].container
+                container.position = SCNVector3(x, y, wallZ)
+                
                 var slot = slots[row][col]
-                slot.node = nil
-                slot.isRespawning = false
-                loadCube(into: &slot, animated: true)
+                loadCube(into: &slot, animated: false)   // Normal starting position
                 slots[row][col] = slot
             }
         }
