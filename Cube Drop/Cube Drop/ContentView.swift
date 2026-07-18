@@ -478,6 +478,17 @@ final class EntityNode: SCNNode {
 }
 
 final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNPhysicsContactDelegate {
+    let knowledge = KnowledgeTree()
+    var gameState: GameState
+
+    init(gameState: GameState) {
+        self.gameState = gameState
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     struct CubeSlot {
         let row: Int
@@ -486,9 +497,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         var node: SCNNode?
         var isRespawning: Bool = false
     }
-
-    let knowledge = KnowledgeTree()
-    let gameState = GameState()
 
     var sceneView: SCNView!
     var scene: SCNScene!
@@ -535,6 +543,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     var activeLasers: [SCNNode] = []
 
     var playerNode: SCNNode?
+    
+    // Visual platform that shows the player's firing base
+    var platformNode: SCNNode?
 
     // Grasshopper AI state
     var grasshopperJumping = Set<ObjectIdentifier>()
@@ -557,6 +568,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         super.viewDidLoad()
         setupScene()
         setupPlayer()
+        setupPlayerPlatform()
         setupLighting()
         setupCamera()
         setupWorld()
@@ -640,6 +652,28 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         scene.rootNode.addChildNode(player)
     }
+    
+    func setupPlayerPlatform() {
+        // A small base at ground level that tracks the laser's X position
+        let width = CGFloat(cubeSize + cubeSpacing) * 0.9
+        let height: CGFloat = 0.12
+        let depth: CGFloat = 0.4
+        let box = SCNBox(width: width, height: height, length: depth, chamferRadius: 0.06)
+        box.firstMaterial?.diffuse.contents = UIColor(white: 0.25, alpha: 1.0)
+        box.firstMaterial?.emission.contents = UIColor.cyan.withAlphaComponent(0.6)
+        box.firstMaterial?.lightingModel = .blinn
+
+        let node = SCNNode(geometry: box)
+        node.name = "playerPlatform"
+        let x = laserWorldPosition().x
+        node.position = SCNVector3(x, groundY + Float(height * 0.5), wallZ)
+        node.renderingOrder = 10
+        // purely visual; no physics body
+
+        scene.rootNode.addChildNode(node)
+        platformNode = node
+    }
+
     func setupCamera() {
         let camera = SCNCamera()
         camera.fieldOfView = 50
@@ -676,13 +710,19 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         return node
     }
 
-    func spawnCentipedeSegment(at position: SCNVector3, follow target: SCNNode) {
+    func spawnCentipedeSegment(at position: SCNVector3, follow target: SCNNode?) {
         let size = cubeSize * 1.2
         let plane = makeLabelBillboard(text: "CS", color: .white, worldSize: size)
         let node = EntityNode(kind: .centipedeSegment, geometry: plane)
         node.name = "CS"
-        node.position = position
         node.renderingOrder = 100
+
+        if let target = target {
+            let targetPos = target.presentation.worldPosition
+            node.position = SCNVector3(targetPos.x - 1.0, targetPos.y, targetPos.z)
+        } else {
+            node.position = SCNVector3(position.x - 1.0, position.y, position.z)
+        }
 
         let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
         body.categoryBitMask = PhysicsCategory.centipede
@@ -695,7 +735,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         node.constraints = [billboard]
 
         centipedeDirection[ObjectIdentifier(node)] = Bool.random() ? 1.0 : -1.0
-        centipedeFollowTarget[ObjectIdentifier(node)] = target
+        if let target = target {
+            centipedeFollowTarget[ObjectIdentifier(node)] = target
+        }
         enemyRoot.addChildNode(node)
     }
     func spawnLadybug() {
@@ -1048,6 +1090,10 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         let fraction = max(0, min(1, x / sceneView.bounds.width))
         let newColumn = Int(round(fraction * CGFloat(gridWidth - 1)))
         laserColumn = max(0, min(gridWidth - 1, newColumn))
+        // Keep the platform aligned with the firing column
+        if let platform = platformNode {
+            platform.position.x = laserWorldPosition().x
+        }
     }
 
     func bestTarget(at screenPoint: CGPoint) -> SCNNode? {
@@ -1212,8 +1258,10 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         }
 
         if scoreDelta > 0 {
-            gameState.score += scoreDelta
-            gameState.combo += 1
+            DispatchQueue.main.async {
+                self.gameState.score += scoreDelta
+                self.gameState.combo += 1
+            }
         }
     }
 
@@ -1348,7 +1396,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         //--------------------------------------------------
         // CENTIPEDE DESTROYED
         //--------------------------------------------------
-/*
+
         if kind == .centipedeHead ||
            kind == .centipedeSegment {
 
@@ -1356,7 +1404,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
                 at: point
             )
         }
- */
+
     }
     func distanceBetween(_ a: SCNVector3, _ b: SCNVector3) -> Float {
 
@@ -2188,7 +2236,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         // MISSILE HITS PLAYER -> GAME OVER
         //--------------------------------------------------
 
-        /*
+    
         if isMissileA && categoryB == PhysicsCategory.player {
 
             if !gameState.isGameOver {
@@ -2213,13 +2261,13 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             b.removeFromParentNode()
             return
         }
-         */
+        
 
         //--------------------------------------------------
         // SPIDER / CENTIPEDE / GRASSHOPPER TOUCHES PLAYER -> GAME OVER
         //--------------------------------------------------
 
-        /*
+     
         let dangerousCategories =
             PhysicsCategory.spider |
             PhysicsCategory.centipede |
@@ -2234,7 +2282,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             triggerGameOverFromEnemyContact(node: b, at: contact.contactPoint)
             return
         }
-*/
+
 
         //--------------------------------------------------
         // POINT / BONUS OBJECT HITS GROUND
@@ -2752,6 +2800,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
                 wallZ
             ), follow:headNode
         )
+        
+        platformNode?.position.x = laserWorldPosition().x
     }
     func destroyLaser(
         _ laser: SCNNode,
@@ -2766,13 +2816,13 @@ struct GameView: UIViewControllerRepresentable {
     @ObservedObject var gameState: GameState
 
     func makeUIViewController(context: Context) -> GameViewController {
-        let vc = GameViewController()
-        return vc
+        GameViewController(gameState: gameState)
     }
 
-    func updateUIViewController(_ uiViewController: GameViewController, context: Context) {}
+    func updateUIViewController(_ uiViewController: GameViewController, context: Context) {
+        uiViewController.gameState = gameState
+    }
 }
-
 struct ContentView: View {
     @StateObject private var gameState = GameState()
     @State private var restartNonce = UUID()
@@ -2839,3 +2889,4 @@ struct ContentView: View {
         .background(Color.black)
     }
 }
+
