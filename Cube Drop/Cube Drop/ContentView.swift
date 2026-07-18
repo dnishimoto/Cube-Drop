@@ -595,10 +595,10 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         setupGestures()
 
         spawnGrasshopper()
-        let headNode = spawnCentipedeHead(at: SCNVector3(-2.0, topOfGridY(), 0.0))
-        spawnCentipedeSegment(at: SCNVector3(-2.0, topOfGridY(), 0.0), follow: headNode)
+        /*let headNode = spawnCentipedeHead(at: SCNVector3(-2.0, topOfGridY(), 0.0))
+        spawnCentipedeSegment(at: SCNVector3(-2.0, topOfGridY(), 0.0), follow: headNode)*/
         
-             spawnSpider()
+        spawnSpider()
         spawnLadybug()
         spawnFly()
 
@@ -708,14 +708,22 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     }
     @discardableResult
     func spawnCentipedeHead(at worldPosition: SCNVector3) -> SCNNode {
-        let size = cubeSize * 1.2
-        let plane = makeLabelBillboard(text: "CH", color: .white, worldSize: size)
+        let size = cubeSize * 1.3
+        
+        // Centipede head icon
+        let plane = makeLabelBillboard(
+            text: "👾",
+            color: nil,
+            worldSize: size
+        )
+        
         let node = EntityNode(kind: .centipedeHead, geometry: plane)
-        node.name = "CH"
+        node.name = "CentipedeHead"
         node.position = worldPosition
-        node.renderingOrder = 100
-
-        let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
+        node.renderingOrder = 120
+        node.scale = SCNVector3(1.15, 1.15, 1.15)   // Slightly larger for better visibility
+        
+        let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size * 1.1))
         body.categoryBitMask = PhysicsCategory.centipede
         body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.cube | PhysicsCategory.player
         body.collisionBitMask = PhysicsCategory.none
@@ -729,10 +737,13 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         enemyRoot.addChildNode(node)
         return node
     }
-
-    func spawnCentipedeSegment(at position: SCNVector3, follow target: SCNNode?) {
+    func spawnCentipedeSegment(at position: SCNVector3, follow target: SCNNode?) -> SCNNode {
         let size = cubeSize * 1.2
-        let plane = makeLabelBillboard(text: "CS", color: .white, worldSize: size)
+        let plane = makeLabelBillboard(
+            text: "🟢",
+            color: nil,
+            worldSize: size
+        )
         let node = EntityNode(kind: .centipedeSegment, geometry: plane)
         node.name = "CS"
         node.renderingOrder = 100
@@ -759,42 +770,58 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             centipedeFollowTarget[ObjectIdentifier(node)] = target
         }
         enemyRoot.addChildNode(node)
+        return node
     }
     func spawnLadybug() {
-        let size = cubeSize * 1.2
-        let plane = makeLabelBillboard(text: "L", color: .white, worldSize: size)
+        let size = cubeSize * 1.35
+        
+        // Use ladybug emoji with natural colors (no tint)
+        let plane = makeLabelBillboard(text: "🐞", color: nil, worldSize: size)
+        
         let node = EntityNode(kind: .ladybug, geometry: plane)
-        node.name = "L"
-        node.position = SCNVector3(5, groundY + 4, 0)
-        node.renderingOrder = 100
-        let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
+        node.name = "Ladybug"
+        node.position = SCNVector3(5, groundY + 4.5, 0)
+        node.renderingOrder = 110
+        node.scale = SCNVector3(1.1, 1.1, 1.1)   // Make it a bit more visible
+        
+        let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size * 1.1))
         body.categoryBitMask = PhysicsCategory.ladybug
         body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.player
         body.collisionBitMask = PhysicsCategory.none
         node.physicsBody = body
+        
         let billboard = SCNBillboardConstraint()
         billboard.freeAxes = .all
         node.constraints = [billboard]
+        
         ladybugDirection[ObjectIdentifier(node)] = Bool.random() ? 1.0 : -1.0
+        
         enemyRoot.addChildNode(node)
     }
 
     func spawnLadybug(at worldPosition: SCNVector3) {
-        let size = cubeSize * 1.2
-        let plane = makeLabelBillboard(text: "L", color: .white, worldSize: size)
+        let size = cubeSize * 1.25
+        
+        // Ladybug emoji icon
+        let plane = makeLabelBillboard(text: "🐞", color: .white, worldSize: size)
+        
         let node = EntityNode(kind: .ladybug, geometry: plane)
-        node.name = "L"
+        node.name = "Ladybug"
         node.position = worldPosition
-        node.renderingOrder = 100
+        node.renderingOrder = 110
+        
         let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
         body.categoryBitMask = PhysicsCategory.ladybug
         body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.player
         body.collisionBitMask = PhysicsCategory.none
         node.physicsBody = body
+        
         let billboard = SCNBillboardConstraint()
         billboard.freeAxes = .all
         node.constraints = [billboard]
+        
         ladybugDirection[ObjectIdentifier(node)] = Bool.random() ? 1.0 : -1.0
+        
         enemyRoot.addChildNode(node)
     }
 
@@ -834,17 +861,22 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     }
 
     func spawnSpider(at worldPosition: SCNVector3) {
-        let size = cubeSize * 1.2
-        let plane = makeLabelBillboard(text: "S", color: .white, worldSize: size)
+        let size = cubeSize * 1.3
+        
+        // Use spider emoji instead of "S"
+        let plane = makeLabelBillboard(text: "🕷️", color: .white, worldSize: size)
+        
         let node = EntityNode(kind: .spider, geometry: plane)
-        node.name = "S"
+        node.name = "Spider"
         node.position = worldPosition
-        node.renderingOrder = 100
+        node.renderingOrder = 120
+        
         let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
         body.categoryBitMask = PhysicsCategory.spider
         body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.player
         body.collisionBitMask = PhysicsCategory.none
         node.physicsBody = body
+        
         let billboard = SCNBillboardConstraint()
         billboard.freeAxes = .all
         node.constraints = [billboard]
@@ -853,7 +885,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         enemyRoot.addChildNode(node)
     }
-
  
     func spawnRewardEnemy(at worldPosition: SCNVector3) {
         let safeY = min(worldPosition.y, topOfGridY() - 0.5)
@@ -868,7 +899,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             spawnLadybug(at: spawnPoint)
         default:
             let headNode = spawnCentipedeHead(at: spawnPoint)
-            spawnCentipedeSegment(at: spawnPoint, follow: headNode)
+            let bodyNode1 = spawnCentipedeSegment(at: spawnPoint, follow: headNode)
+            let bodyNode2 = spawnCentipedeSegment(at: spawnPoint, follow: bodyNode1)
         }
     }
 
@@ -1756,34 +1788,32 @@ func setupGestures() {
     // reachable cube exists, per spec.
     //---------------------------------------------------------
     func fallToGround(_ grasshopper: SCNNode) {
-
-        let targetY = groundY
+        let targetY = groundY + 0.4   // slightly above ground
 
         let fall = SCNAction.move(
-            to: SCNVector3(
-                grasshopper.position.x,
-                targetY,
-                grasshopper.position.z
-            ),
-            duration: 0.45
+            to: SCNVector3(grasshopper.position.x, targetY, grasshopper.position.z),
+            duration: 0.55
         )
-
         fall.timingMode = .easeIn
 
-        let impact = SCNAction.run { [weak self] node in
+        let finish = SCNAction.run { [weak self] node in
             guard let self = self else { return }
-            self.spawnExplosion(at: node.position, color: .brown)
+
+            // Check if it landed on/near the player
+            if let player = self.playerNode {
+                let dist = self.distanceBetween(node.presentation.worldPosition, player.presentation.worldPosition)
+                if dist < 1.2 {
+                    self.triggerGameOverFromEnemyContact(node: node, at: node.presentation.worldPosition)
+                    return
+                }
+            }
+
+            // Otherwise just remove with explosion
+            self.spawnExplosion(at: node.presentation.worldPosition, color: .brown)
+            node.removeFromParentNode()
         }
 
-        let remove = SCNAction.removeFromParentNode()
-
-        grasshopper.runAction(
-            .sequence([
-                fall,
-                impact,
-                remove
-            ])
-        )
+        grasshopper.runAction(.sequence([fall, finish]))
     }
     func worldPointFromScreen(_ point: CGPoint, yPlane: Float) -> SCNVector3 {
         let near = sceneView.unprojectPoint(SCNVector3(Float(point.x), Float(point.y), 0))
@@ -1798,39 +1828,24 @@ func setupGestures() {
         )
     }
 
-    //---------------------------------------------------------
-    // GRASSHOPPER AI
-    // Jumps from cube to cube toward the player. If the player is
-    // within direct leap range it jumps straight at them. If no
-    // cube is in jump range, it leaps and falls to its death.
-    //---------------------------------------------------------
     func updateGrasshopper(_ grasshopper: SCNNode) {
-
         let id = ObjectIdentifier(grasshopper)
 
         if grasshopperJumping.contains(id) {
             return
         }
 
-        guard let player = playerNode else {
-            return
-        }
+        guard let player = playerNode else { return }
 
-        let playerDistance = distanceBetween(
-            grasshopper.presentation.worldPosition,
-            player.presentation.worldPosition
-        )
+        let currentPos = grasshopper.presentation.worldPosition
+        let playerDistance = distanceBetween(currentPos, player.presentation.worldPosition)
 
         let directLeapDistance: Float = 1.8
 
         grasshopperJumping.insert(id)
 
-        //--------------------------------------------------
-        // PLAYER IS DIRECTLY REACHABLE
-        //--------------------------------------------------
-
+        // 1. Direct leap to player if close enough
         if playerDistance < directLeapDistance {
-
             arcJump(
                 grasshopper: grasshopper,
                 target: player.presentation.worldPosition
@@ -1839,17 +1854,11 @@ func setupGestures() {
                 self.grasshopperJumping.remove(id)
                 self.checkGrasshopperLanding(grasshopper)
             }
-
             return
         }
 
-
-        //--------------------------------------------------
-        // HOP TO THE BEST REACHABLE CUBE
-        //--------------------------------------------------
-
+        // 2. Try to hop to the best reachable cube
         if let targetCube = nextJumpTarget(from: grasshopper, toward: player) {
-
             let cubePos = targetCube.presentation.worldPosition
             let landing = SCNVector3(
                 cubePos.x,
@@ -1863,19 +1872,14 @@ func setupGestures() {
             ) { [weak self] in
                 self?.grasshopperJumping.remove(id)
             }
-
             return
         }
 
-
-        //--------------------------------------------------
-        // NO REACHABLE CUBE -> LEAP AND FALL
-        //--------------------------------------------------
-
+        // 3. NO reachable cube → Fall to the ground
         grasshopperJumping.remove(id)
         fallToGround(grasshopper)
     }
-
+ 
     func checkGrasshopperLanding(
         _ grasshopper: SCNNode
     ) {
@@ -2171,40 +2175,54 @@ func setupGestures() {
         }
     }
 
-    private func drawLabelImage(text: String, size: CGSize, color: UIColor, bgColor: UIColor = .clear) -> UIImage {
+    private func drawLabelImage(text: String, size: CGSize, color: UIColor? = nil) -> UIImage {
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { ctx in
             let rect = CGRect(origin: .zero, size: size)
-            bgColor.setFill()
+            
+            // Clear background
+            UIColor.clear.setFill()
             ctx.fill(rect)
-
-            let fontSize = min(size.width, size.height) * 0.8
+            
+            let fontSize = size.width * 0.85
+            
+            // For multi-colored emojis (like 🐞), we use a different approach
             let paragraph = NSMutableParagraphStyle()
             paragraph.alignment = .center
+            
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.boldSystemFont(ofSize: fontSize),
-                .foregroundColor: color,
+                .font: UIFont.systemFont(ofSize: fontSize, weight: .regular),
+                .foregroundColor: color ?? UIColor.white,
                 .paragraphStyle: paragraph
             ]
-            let attributed = NSAttributedString(string: text, attributes: attrs)
-            let textSize = attributed.size()
+            
+            let attributedString = NSAttributedString(string: text, attributes: attrs)
+            let textSize = attributedString.size()
+            
             let drawRect = CGRect(
-                x: (size.width - textSize.width) * 0.5,
-                y: (size.height - textSize.height) * 0.5,
+                x: (size.width - textSize.width) / 2,
+                y: (size.height - textSize.height) / 2,
                 width: textSize.width,
                 height: textSize.height
             )
-            attributed.draw(in: drawRect)
+            
+            attributedString.draw(in: drawRect)
         }
     }
 
-    private func makeLabelBillboard(text: String, color: UIColor, worldSize: CGFloat) -> SCNPlane {
+    private func makeLabelBillboard(text: String, color: UIColor? = nil, worldSize: CGFloat) -> SCNPlane {
         let plane = SCNPlane(width: worldSize, height: worldSize)
-        let img = drawLabelImage(text: text, size: CGSize(width: 384, height: 384), color: color)
+        let img = drawLabelImage(
+            text: text,
+            size: CGSize(width: 384, height: 384),
+            color: color ?? .white   // Use passed color only if provided
+        )
 
         let mat = SCNMaterial()
         mat.diffuse.contents = img
-        mat.emission.contents = UIColor.white
+        
+        // Use emission as white for brightness, but keep emoji's original colors
+        mat.emission.contents = UIColor.white.withAlphaComponent(0.3)
         mat.lightingModel = .constant
         mat.blendMode = .alpha
         mat.isDoubleSided = true
@@ -2214,7 +2232,6 @@ func setupGestures() {
         plane.materials = [mat]
         return plane
     }
-
     private func labelPhysicsShape(size: CGFloat) -> SCNPhysicsShape {
         let thickness = max(0.01, size * 0.05)
         let box = SCNBox(width: size, height: size, length: thickness, chamferRadius: 0)
@@ -2252,17 +2269,21 @@ func setupGestures() {
     // Guarded against double-firing.
     //--------------------------------------------------
     func triggerGameOverFromEnemyContact(node: SCNNode, at point: SCNVector3) {
+
         guard !gameState.isGameOver else { return }
 
         if let k = kind(of: node) {
             cleanupTrackingState(for: node, kind: k)
         }
 
-        gameState.isGameOver = true
         spawnExplosion(at: point, color: .red)
         playSound(GameSound.gameOver.rawValue)
 
         node.removeFromParentNode()
+
+        DispatchQueue.main.async {
+            self.gameState.isGameOver = true
+        }
     }
 
     func physicsWorld(
@@ -2829,20 +2850,27 @@ func setupGestures() {
     }
 
     func spawnGrasshopper() {
-        let size = cubeSize * 1.2
-        let plane = makeLabelBillboard(text: "H", color: .white, worldSize: size)
+        let size = cubeSize * 1.35
+        
+        // Grasshopper emoji - natural colors
+        let plane = makeLabelBillboard(text: "🦗", color: nil, worldSize: size)
+        
         let grasshopper = EntityNode(kind: .grasshopper, geometry: plane)
-        grasshopper.name = "H"
-        grasshopper.position = SCNVector3(0, groundY + 5, 0)
-        grasshopper.renderingOrder = 100
-        let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
+        grasshopper.name = "Grasshopper"
+        grasshopper.position = SCNVector3(0, groundY + 5.5, 0)
+        grasshopper.renderingOrder = 115
+        grasshopper.scale = SCNVector3(1.15, 1.15, 1.15)   // Make it more visible
+        
+        let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size * 1.1))
         body.categoryBitMask = PhysicsCategory.grasshopper
         body.contactTestBitMask = PhysicsCategory.cube | PhysicsCategory.player | PhysicsCategory.laser
         body.collisionBitMask = PhysicsCategory.none
         grasshopper.physicsBody = body
+        
         let billboard = SCNBillboardConstraint()
         billboard.freeAxes = .all
         grasshopper.constraints = [billboard]
+        
         enemyRoot.addChildNode(grasshopper)
     }
 
@@ -2982,6 +3010,7 @@ func setupGestures() {
 
         spawnLadybug()
 
+        /*
         let headNode=spawnCentipedeHead(at: SCNVector3(-3, groundY + 5, 0))
 
         spawnCentipedeSegment(
@@ -2991,6 +3020,7 @@ func setupGestures() {
                 wallZ
             ), follow:headNode
         )
+         */
         
         platformNode?.position.x = laserWorldPosition().x
     }
