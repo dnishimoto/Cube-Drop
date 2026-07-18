@@ -481,6 +481,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     let knowledge = KnowledgeTree()
     var gameState: GameState
 
+    var longPressFireTimer: Timer?
+    var longPressFireInterval: TimeInterval = 0.10
+
     init(gameState: GameState) {
         self.gameState = gameState
         super.init(nibName: nil, bundle: nil)
@@ -1009,16 +1012,39 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         slashPan.minimumNumberOfTouches = 2
         slashPan.cancelsTouchesInView = false
         sceneView.addGestureRecognizer(slashPan)
-    }
 
+        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
+        longPress.minimumPressDuration = 0.20
+        longPress.allowableMovement = 35
+        longPress.cancelsTouchesInView = false
+        longPress.delaysTouchesBegan = false
+        sceneView.addGestureRecognizer(longPress)
+
+        // Prefer long press over tap and pan so continuous fire is reliable
+        tap.require(toFail: longPress)
+        pan.require(toFail: longPress)
+    }
     @objc func handleTap(_ gesture: UITapGestureRecognizer) {
         guard !gameState.isGameOver else { return }
         let location = gesture.location(in: sceneView)
+        // If the tap is on/near the platform (or player as fallback), fire a manual shot in addition to auto-fire
+        if let anchorNode = platformNode ?? playerNode {
+            let anchorScreen = sceneView.projectPoint(anchorNode.presentation.worldPosition)
+            let dx = CGFloat(anchorScreen.x) - location.x
+            let dy = CGFloat(anchorScreen.y) - location.y
+            let dist = sqrt(dx*dx + dy*dy)
+            // Increased radius to make tapping near the platform more forgiving
+            if dist <= 120 { // screen-space radius in points
+                fireLaser()
+                return
+            }
+        }
         if let target = bestTarget(at: location) {
             let world = worldPointFromScreen(location, yPlane: target.presentation.worldPosition.y)
             resolveHit(attacker: .playerLaser, target: target, contactPoint: world)
         }
     }
+
 
     @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
         guard !gameState.isGameOver else { return }
@@ -1040,6 +1066,29 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             if let start, start != end {
                 performSlash(from: start, to: end)
             }
+        default:
+            break
+        }
+    }
+
+    @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            longPressFireTimer?.invalidate()
+            let timer = Timer(timeInterval: longPressFireInterval, repeats: true) { [weak self] _ in
+                guard let self = self else { return }
+                if self.gameState.isGameOver {
+                    self.longPressFireTimer?.invalidate()
+                    self.longPressFireTimer = nil
+                    return
+                }
+                self.fireLaser()
+            }
+            self.longPressFireTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        case .ended, .cancelled, .failed:
+            longPressFireTimer?.invalidate()
+            longPressFireTimer = nil
         default:
             break
         }
