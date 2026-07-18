@@ -79,6 +79,7 @@ final class KnowledgeTree {
         case grasshopper
         case spider
         case ladybug
+        case fly
     }
 
 
@@ -132,7 +133,18 @@ final class KnowledgeTree {
 
     init() {
 
-
+        register(
+            .fly,
+            behaviors: [
+                .hostile,
+                .destroyedByLaser,
+                .causesGameOverOnContact,
+                .awardsScore(90)
+            ],
+            scoreValue: 90,
+            weakness: [.playerLaser],
+            canBeTargetedByLaser: true
+        )
         //--------------------------------------------------
         // PLAYER LASER
         //--------------------------------------------------
@@ -453,6 +465,7 @@ struct PhysicsCategory {
     static let ladybug: Int = 1 << 9
     static let ground: Int = 1 << 10
     static let player: Int = 1 << 11
+    static let fly: Int = 1 << 12   // Add this line
 }
 
 final class GameState: ObservableObject {
@@ -566,6 +579,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     private var slashStartScreenPoint: CGPoint?
     private var slashEndScreenPoint: CGPoint?
+    
+    var flyWobble: [ObjectIdentifier: Float] = [:]
+    var flyChaos: [ObjectIdentifier: Float] = [:]
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -584,6 +600,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         
              spawnSpider()
         spawnLadybug()
+        spawnFly()
 
         scene.physicsWorld.contactDelegate = self
         scene.physicsWorld.gravity = SCNVector3Zero
@@ -2541,6 +2558,71 @@ func setupGestures() {
             updateSpider(node, dt: dt)
         }
     }
+    func spawnFly() {
+        let size = cubeSize * 1.1
+        let plane = makeLabelBillboard(text: "🪰", color: .systemYellow, worldSize: size)
+        
+        let fly = EntityNode(kind: .fly, geometry: plane)
+        fly.name = "FLY"
+        fly.renderingOrder = 150
+        
+        // Spawn at random top position
+        let randomX = Float.random(in: -7...7)
+        fly.position = SCNVector3(randomX, groundY + 10.0, wallZ)
+        
+        let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
+        body.categoryBitMask = PhysicsCategory.fly
+        body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.player
+        body.collisionBitMask = PhysicsCategory.none
+        fly.physicsBody = body
+        
+        let billboard = SCNBillboardConstraint()
+        billboard.freeAxes = .all
+        fly.constraints = [billboard]
+        
+        // Initialize bizarre behavior values
+        let id = ObjectIdentifier(fly)
+        flyWobble[id] = Float.random(in: 8...15)
+        flyChaos[id] = Float.random(in: 1.5...3.0)
+        
+        enemyRoot.addChildNode(fly)
+    }
+    func updateFly(_ fly: SCNNode, dt: TimeInterval) {
+        let id = ObjectIdentifier(fly)
+        guard let wobble = flyWobble[id], let chaos = flyChaos[id] else { return }
+        
+        var pos = fly.position
+        
+        // Chaotic sinusoidal movement + random jitter
+        let time = Float(Date().timeIntervalSince1970)
+        
+        pos.x += sin(time * chaos) * 2.8 * Float(dt)
+        pos.y -= 1.2 * Float(dt)                    // slow descent
+        pos.y += sin(time * wobble) * 0.9 * Float(dt)  // vertical wobble
+        
+        // Random direction changes (bizarre behavior)
+        if Int.random(in: 0...80) == 0 {
+            flyChaos[id] = Float.random(in: 1.8...4.2)   // change chaos level
+        }
+        
+        // Keep within bounds
+        let bound: Float = 8.5
+        pos.x = max(-bound, min(bound, pos.x))
+        
+        // Occasionally dart sideways
+        if Int.random(in: 0...120) == 0 {
+            pos.x += Bool.random() ? 3.5 : -3.5
+        }
+        
+        fly.position = pos
+        
+        // Remove if too low
+        if pos.y < groundY - 2 {
+            flyWobble.removeValue(forKey: id)
+            flyChaos.removeValue(forKey: id)
+            fly.removeFromParentNode()
+        }
+    }
     func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
         let dt = lastUpdateTime == 0 ? 0 : time - lastUpdateTime
         lastUpdateTime = time
@@ -2565,6 +2647,8 @@ func setupGestures() {
                 self.updateSpider(entity, dt: dt)
             case .ladybug:
                 self.updateLadybugMovement(entity, dt: dt)
+            case .fly:                    // ← New Fly entity
+                self.updateFly(entity, dt: dt)
             default:
                 break
             }
@@ -2581,6 +2665,12 @@ func setupGestures() {
         if time - lastFireTime > max(0.6, 2.5 / gameState.difficulty) {
             lastFireTime = time
             spawnUFOIfNeeded()
+        }
+        
+        if time.truncatingRemainder(dividingBy: 6.0) < 0.1 {
+            if Int.random(in: 0...3) == 0 {
+                spawnFly()
+            }
         }
     }
 
