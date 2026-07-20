@@ -530,6 +530,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     var lastUpdateTime: TimeInterval = 0
     var lastFireTime: TimeInterval = 0
+    
+    var lastFlySpawnTime: TimeInterval = 0
+    var flySpawnInterval: TimeInterval = 6.0
 
     var laserColumn: Int = 8
     var gridDirection: Float = 1
@@ -701,8 +704,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         cameraNode.position = SCNVector3(
             anchor.x,
             anchor.y - 0.15,
-            14.0
+            18.0
         )
+
 
         let lookAtPoint = SCNVector3(
             anchor.x,
@@ -2262,14 +2266,12 @@ func setupGestures() {
         let img = drawLabelImage(
             text: text,
             size: CGSize(width: 384, height: 384),
-            color: color ?? .white   // Use passed color only if provided
+            color: color
         )
 
         let mat = SCNMaterial()
         mat.diffuse.contents = img
-        
-        // Use emission as white for brightness, but keep emoji's original colors
-        mat.emission.contents = UIColor.white.withAlphaComponent(0.3)
+        mat.emission.contents = UIColor.clear
         mat.lightingModel = .constant
         mat.blendMode = .alpha
         mat.isDoubleSided = true
@@ -2650,62 +2652,60 @@ func setupGestures() {
     func spawnFly() {
         let size = cubeSize * 1.1
         let plane = makeLabelBillboard(text: "🪰", color: .systemYellow, worldSize: size)
-        
+
         let fly = EntityNode(kind: .fly, geometry: plane)
         fly.name = "FLY"
         fly.renderingOrder = 150
-        
-        // Spawn at random top position
-        let randomX = Float.random(in: -7...7)
-        fly.position = SCNVector3(randomX, groundY + 10.0, wallZ)
-        
+        fly.position = SCNVector3(Float.random(in: -7...7), groundY + 12.0, wallZ)
+
         let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
         body.categoryBitMask = PhysicsCategory.fly
         body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.player
         body.collisionBitMask = PhysicsCategory.none
         fly.physicsBody = body
-        
+
         let billboard = SCNBillboardConstraint()
         billboard.freeAxes = .all
         fly.constraints = [billboard]
-        
-        // Initialize bizarre behavior values
+
         let id = ObjectIdentifier(fly)
         flyWobble[id] = Float.random(in: 8...15)
         flyChaos[id] = Float.random(in: 1.5...3.0)
-        
+
         enemyRoot.addChildNode(fly)
     }
     func updateFly(_ fly: SCNNode, dt: TimeInterval) {
         let id = ObjectIdentifier(fly)
         guard let wobble = flyWobble[id], let chaos = flyChaos[id] else { return }
-        
+        guard let player = playerNode else { return }
+
         var pos = fly.position
-        
-        // Chaotic sinusoidal movement + random jitter
+        let playerPos = player.presentation.worldPosition
         let time = Float(Date().timeIntervalSince1970)
-        
-        pos.x += sin(time * chaos) * 2.8 * Float(dt)
-        pos.y -= 1.2 * Float(dt)                    // slow descent
-        pos.y += sin(time * wobble) * 0.9 * Float(dt)  // vertical wobble
-        
-        // Random direction changes (bizarre behavior)
-        if Int.random(in: 0...80) == 0 {
-            flyChaos[id] = Float.random(in: 1.8...4.2)   // change chaos level
+
+        let seekX = playerPos.x - pos.x
+        let seekY = playerPos.y - pos.y
+
+        let seekForceX = max(-1.0, min(1.0, seekX * 0.35))
+        let seekForceY = max(-0.8, min(0.8, seekY * 0.12))
+
+        let zig = sin(time * chaos) * 4.5
+        let zig2 = sin(time * (chaos * 1.7) + 1.4) * 2.2
+        let jitter = Float.random(in: -0.6...0.6)
+
+        pos.x += (seekForceX + zig + zig2 + jitter) * Float(dt)
+        pos.y += (seekForceY - 1.35 + sin(time * wobble) * 1.1) * Float(dt)
+
+        if Int.random(in: 0...50) == 0 {
+            flyChaos[id] = Float.random(in: 2.5...5.8)
+            flyWobble[id] = Float.random(in: 10...18)
         }
-        
-        // Keep within bounds
+
         let bound: Float = 8.5
         pos.x = max(-bound, min(bound, pos.x))
-        
-        // Occasionally dart sideways
-        if Int.random(in: 0...120) == 0 {
-            pos.x += Bool.random() ? 3.5 : -3.5
-        }
-        
+
         fly.position = pos
-        
-        // Remove if too low
+
         if pos.y < groundY - 2 {
             flyWobble.removeValue(forKey: id)
             flyChaos.removeValue(forKey: id)
@@ -2717,9 +2717,9 @@ func setupGestures() {
         lastUpdateTime = time
         guard dt > 0, !gameState.isGameOver else { return }
 
-        //updateDifficulty()
-        //if allCubesGone() { respawnAllCubes() }
-        
+        // updateDifficulty()
+        // if allCubesGone() { respawnAllCubes() }
+
         updateGrid(dt: dt)
 
         gridOffset += gridDirection * gridSpeed * Float(dt)
@@ -2730,32 +2730,34 @@ func setupGestures() {
             switch entity.kind {
             case .grasshopper:
                 self.updateGrasshopper(entity)
-              case .spider:
+            case .spider:
                 self.updateSpider(entity, dt: dt)
             case .ladybug:
                 self.updateLadybugMovement(entity, dt: dt)
-            case .fly:                    // ← New Fly entity
+            case .fly:
                 self.updateFly(entity, dt: dt)
             default:
                 break
             }
         }
-        
-        // FIX: previously each of these loops had `stop.pointee = true` right
-        // after the first match, which meant only ONE centipede head and ONE
-        // centipede segment in the whole scene ever got updated per frame —
-        // every other segment was frozen. Removed so every matching node updates.
+
         scene.rootNode.enumerateChildNodes { node, _ in
             guard let entity = node as? EntityNode, entity.kind == .centipedeHead else { return }
             self.updateCentipedeHead(node, dt: dt)
         }
+
         scene.rootNode.enumerateChildNodes { node, _ in
             guard let entity = node as? EntityNode, entity.kind == .centipedeSegment else { return }
             self.updateCentipedeSegment(node, dt: dt)
         }
-        
+
         updateEntities(dt: dt)
         updateLasers(dt: dt)
+        
+        scene.rootNode.enumerateChildNodes { node, _ in
+            guard let entity = node as? EntityNode, entity.kind == .fly else { return }
+            self.updateFly(entity, dt: dt)
+        }
 
         if autoFireEnabled, time - lastAutoFireTime >= autoFireInterval {
             fireLaser()
@@ -2766,12 +2768,14 @@ func setupGestures() {
             lastFireTime = time
             spawnUFOIfNeeded()
         }
-        
-        if time.truncatingRemainder(dividingBy: 6.0) < 0.1 {
+
+        if time - lastFlySpawnTime >= flySpawnInterval {
+            lastFlySpawnTime = time
             if Int.random(in: 0...3) == 0 {
                 spawnFly()
             }
         }
+
     }
 
     //---------------------------------------------------------
