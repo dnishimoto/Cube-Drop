@@ -301,8 +301,6 @@ final class KnowledgeTree {
             canBeTargetedByLaser: true
         )
 
-
-
         //--------------------------------------------------
         // CENTIPEDE SEGMENT
         //--------------------------------------------------
@@ -450,22 +448,18 @@ struct PhysicsCategory {
     static let none: Int = 0
     static let laser: Int = 1 << 0
     static let cube: Int = 1 << 1
-    // bonusPointObject reuses the pointObject category on purpose -
-    // they behave identically at the physics layer (fall, get
-    // removed on ground contact, targetable by laser). The
-    // distinction that matters (score, burst-on-destroy) lives in
-    // KnowledgeTree / EntityNode.kind, not in the physics category.
     static let pointObject: Int = 1 << 2
     static let ufo: Int = 1 << 3
     static let missile: Int = 1 << 4
-    static let centipede: Int = 1 << 5
+    static let centipedeHead: Int = 1 << 5
     static let mushroom: Int = 1 << 6
     static let grasshopper: Int = 1 << 7
     static let spider: Int = 1 << 8
     static let ladybug: Int = 1 << 9
     static let ground: Int = 1 << 10
-    static let player: Int = 1 << 11
-    static let fly: Int = 1 << 12   // Add this line
+    static let centipedeSegment: Int = 1 << 11
+    static let player: Int = 1 << 12
+    static let fly: Int = 1 << 13
 }
 
 final class GameState: ObservableObject {
@@ -525,6 +519,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     var pointObjectSpawnChance: Int = 18
     var centipedeFollowTarget: [ObjectIdentifier: SCNNode] = [:]
     var centipedeTrailSpacing: Float = 0.55
+    var centipedeLastPosition: [ObjectIdentifier: SCNVector3] = [:]
 
     var gridRoot = SCNNode()
     var enemyRoot = SCNNode()
@@ -593,15 +588,10 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         setupWorld()
         setupGrid()
         setupGestures()
-
         spawnGrasshopper()
-        /*let headNode = spawnCentipedeHead(at: SCNVector3(-2.0, topOfGridY(), 0.0))
-        spawnCentipedeSegment(at: SCNVector3(-2.0, topOfGridY(), 0.0), follow: headNode)*/
-        
         spawnSpider()
         spawnLadybug()
         spawnFly()
-
         scene.physicsWorld.contactDelegate = self
         scene.physicsWorld.gravity = SCNVector3Zero
         sceneView.delegate = self
@@ -661,7 +651,10 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             PhysicsCategory.missile |
             PhysicsCategory.grasshopper |
             PhysicsCategory.spider |
-            PhysicsCategory.centipede
+            PhysicsCategory.centipedeHead |
+            PhysicsCategory.centipedeSegment |
+            PhysicsCategory.ladybug |
+            PhysicsCategory.fly
 
         body.collisionBitMask = PhysicsCategory.none
 
@@ -700,32 +693,51 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         camera.zFar = 120
         cameraNode.camera = camera
 
-        let centerY = groundY + 3.0 + Float(gridHeight) / 2 * Float(cubeSize + cubeSpacing)
+        // Compute vertical center of the grid
+        let pitch = Float(cubeSize + cubeSpacing)
+        let centerY = groundY + 3.0 + Float(gridHeight) / 2.0 * pitch
+
+        // Position the camera out in front of the grid
         cameraNode.position = SCNVector3(0, centerY, 16)
-        cameraNode.look(at: SCNVector3(0, centerY - 2, 0))
+
+        // Target point: center of the grid in X and Y, at Z = 0
+        let lookAtPoint = SCNVector3(0, centerY - 2, 0)
+        cameraNode.look(at: lookAtPoint)
 
         scene.rootNode.addChildNode(cameraNode)
     }
     @discardableResult
     func spawnCentipedeHead(at worldPosition: SCNVector3) -> SCNNode {
+
         let size = cubeSize * 1.3
-        
-        // Centipede head icon
+
         let plane = makeLabelBillboard(
             text: "👾",
             color: nil,
             worldSize: size
         )
-        
-        let node = EntityNode(kind: .centipedeHead, geometry: plane)
-        node.name = "CentipedeHead"
+
+        let node = EntityNode(
+            kind: .centipedeHead,
+            geometry: plane
+        )
+
+        node.name = "CH"
         node.position = worldPosition
         node.renderingOrder = 120
-        node.scale = SCNVector3(1.15, 1.15, 1.15)   // Slightly larger for better visibility
-        
-        let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size * 1.1))
-        body.categoryBitMask = PhysicsCategory.centipede
-        body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.cube | PhysicsCategory.player
+        node.scale = SCNVector3(1.15, 1.15, 1.15)
+
+        let body = SCNPhysicsBody(
+            type: .kinematic,
+            shape: labelPhysicsShape(size: size * 1.1)
+        )
+
+        body.categoryBitMask = PhysicsCategory.centipedeHead
+        body.contactTestBitMask =
+            PhysicsCategory.laser |
+            PhysicsCategory.cube |
+            PhysicsCategory.player
+
         body.collisionBitMask = PhysicsCategory.none
         node.physicsBody = body
 
@@ -733,31 +745,50 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         billboard.freeAxes = .all
         node.constraints = [billboard]
 
-        centipedeDirection[ObjectIdentifier(node)] = 1.0
+        let id = ObjectIdentifier(node)
+
+        centipedeDirection[id] = 1.0
+
+        // Keep this
+        centipedeLastPosition[id] = worldPosition
+
         enemyRoot.addChildNode(node)
+
         return node
     }
-    func spawnCentipedeSegment(at position: SCNVector3, follow target: SCNNode?) -> SCNNode {
+    
+    func spawnCentipedeSegment(
+        at position: SCNVector3,
+        follow target: SCNNode?
+    ) -> SCNNode {
+
         let size = cubeSize * 1.2
+
         let plane = makeLabelBillboard(
             text: "🟢",
             color: nil,
             worldSize: size
         )
-        let node = EntityNode(kind: .centipedeSegment, geometry: plane)
+
+        let node = EntityNode(
+            kind: .centipedeSegment,
+            geometry: plane
+        )
+
         node.name = "CS"
         node.renderingOrder = 100
 
-        if let target = target {
-            let targetPos = target.presentation.worldPosition
-            node.position = SCNVector3(targetPos.x - 1.0, targetPos.y, targetPos.z)
-        } else {
-            node.position = SCNVector3(position.x - 1.0, position.y, position.z)
-        }
+        let body = SCNPhysicsBody(
+            type: .kinematic,
+            shape: labelPhysicsShape(size: size)
+        )
 
-        let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
-        body.categoryBitMask = PhysicsCategory.centipede
-        body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.cube | PhysicsCategory.player
+        body.categoryBitMask = PhysicsCategory.centipedeSegment
+        body.contactTestBitMask =
+            PhysicsCategory.laser |
+            PhysicsCategory.cube |
+            PhysicsCategory.player
+
         body.collisionBitMask = PhysicsCategory.none
         node.physicsBody = body
 
@@ -765,11 +796,35 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         billboard.freeAxes = .all
         node.constraints = [billboard]
 
-        centipedeDirection[ObjectIdentifier(node)] = Bool.random() ? 1.0 : -1.0
+        let id = ObjectIdentifier(node)
+
+        centipedeDirection[id] =
+            centipedeDirection[ObjectIdentifier(target ?? node)] ?? 1.0
+
         if let target = target {
-            centipedeFollowTarget[ObjectIdentifier(node)] = target
+
+            centipedeFollowTarget[id] = target
+
+            let targetPos = target.presentation.worldPosition
+            let dir = centipedeDirection[ObjectIdentifier(target)] ?? 1.0
+            let spacing = Float(cubeSize * 1.3)
+
+            node.position = SCNVector3(
+                targetPos.x - dir * spacing,
+                targetPos.y,
+                targetPos.z
+            )
+
+            centipedeLastPosition[id] = node.position
+
+        } else {
+
+            node.position = position
+            centipedeLastPosition[id] = position
         }
+
         enemyRoot.addChildNode(node)
+
         return node
     }
     func spawnLadybug() {
@@ -1759,7 +1814,8 @@ func setupGestures() {
             PhysicsCategory.pointObject |
             PhysicsCategory.ufo |
             PhysicsCategory.missile |
-            PhysicsCategory.centipede |
+            PhysicsCategory.centipedeHead |
+        PhysicsCategory.centipedeSegment |
             PhysicsCategory.mushroom |
             PhysicsCategory.grasshopper |
             PhysicsCategory.spider |
@@ -2409,7 +2465,8 @@ func setupGestures() {
      
         let dangerousCategories =
             PhysicsCategory.spider |
-            PhysicsCategory.centipede |
+            PhysicsCategory.centipedeHead |
+            PhysicsCategory.centipedeSegment |
             PhysicsCategory.grasshopper
 
         if (categoryA & dangerousCategories) != 0 && categoryB == PhysicsCategory.player {
@@ -2487,43 +2544,16 @@ func setupGestures() {
             updateGrasshopper(node)
         }
     }
-    func updateCentipedes(dt: TimeInterval) {
-        scene.rootNode.enumerateChildNodes { node, _ in
-            guard let entity = node as? EntityNode else { return }
-            switch entity.kind {
-            case .centipedeHead, .centipedeSegment:
-                updateCentipedeSegment(node, dt: dt)
-            default:
-                break
-            }
-        }
-    }
-    func updateCentipedeSegment(_ node: SCNNode, dt: TimeInterval) {
+
+   
+    
+
+    func updateCentipedeHead(_ node: SCNNode, dt: TimeInterval) {
         let id = ObjectIdentifier(node)
+        centipedeLastPosition[id] = node.presentation.worldPosition
+        
         if centipedeDropping.contains(id) { return }
-
-        if let target = centipedeFollowTarget[id] {
-            if target.parent == nil {
-                centipedeFollowTarget.removeValue(forKey: id)
-            } else {
-                let targetPos = target.presentation.worldPosition
-                let currentPos = node.presentation.worldPosition
-
-                let dx = targetPos.x - currentPos.x
-                let dy = targetPos.y - currentPos.y
-                let dist = sqrt(dx * dx + dy * dy)
-
-                if dist > centipedeTrailSpacing {
-                    let move: Float = min(2.0 * Float(dt), dist - centipedeTrailSpacing)
-                    let nx = dx / dist
-                    let ny = dy / dist
-                    node.position.x += nx * move
-                    node.position.y += ny * move
-                    return
-                }
-            }
-        }
-
+        centipedeLastPosition[id] = node.presentation.worldPosition
         let direction = centipedeDirection[id] ?? 1.0
         let speed: Float = 1.1 * Float(gameState.difficulty)
         let step = direction * speed * Float(dt)
@@ -2540,7 +2570,54 @@ func setupGestures() {
             dropCentipedeRow(node)
         } else {
             node.position = next
+            node.physicsBody?.resetTransform()
         }
+        
+
+        // Record the head's position so the first following segment has a
+        // valid trail point to chase, same as own-path segments do.
+  
+    }
+    func updateCentipedeSegment(_ node: SCNNode, dt: TimeInterval) {
+        let id = ObjectIdentifier(node)
+        guard let parentNode = centipedeFollowTarget[id] else {
+            return
+        }
+
+        let direction = centipedeDirection[id] ?? 1.0
+        let speed: Float = 1.1 * Float(gameState.difficulty)
+        let currentWorld = node.presentation.worldPosition
+
+        let parentID = ObjectIdentifier(parentNode)
+        guard let parentWorld = centipedeLastPosition[parentID] else {
+            return
+        }
+
+        let dx = parentWorld.x - currentWorld.x
+        let dy = parentWorld.y - currentWorld.y
+        let dz = parentWorld.z - currentWorld.z
+        let distance = sqrt(dx * dx + dy * dy + dz * dz)
+
+        if distance > 0.001 {
+            let maxStep = speed * Float(dt)
+            let t = min(1.0, maxStep / distance)
+
+            let nextWorld = SCNVector3(
+                currentWorld.x + dx * t,
+                currentWorld.y + dy * t,
+                currentWorld.z + dz * t
+            )
+
+            if let parent = node.parent {
+                node.position = parent.convertPosition(nextWorld, from: nil)
+            } else {
+                node.position = nextWorld
+            }
+        }
+
+        centipedeDirection[id] = direction
+        centipedeLastPosition[id] = node.presentation.worldPosition
+        node.physicsBody?.resetTransform()
     }
     func updateUFOs(dt: TimeInterval) {
         scene.rootNode.enumerateChildNodes { node, _ in
@@ -2662,9 +2739,7 @@ func setupGestures() {
             switch entity.kind {
             case .grasshopper:
                 self.updateGrasshopper(entity)
-            case .centipedeHead, .centipedeSegment:
-                self.updateCentipedeSegment(entity, dt: dt)
-            case .spider:
+              case .spider:
                 self.updateSpider(entity, dt: dt)
             case .ladybug:
                 self.updateLadybugMovement(entity, dt: dt)
@@ -2674,7 +2749,20 @@ func setupGestures() {
                 break
             }
         }
-
+        
+        // FIX: previously each of these loops had `stop.pointee = true` right
+        // after the first match, which meant only ONE centipede head and ONE
+        // centipede segment in the whole scene ever got updated per frame —
+        // every other segment was frozen. Removed so every matching node updates.
+        scene.rootNode.enumerateChildNodes { node, _ in
+            guard let entity = node as? EntityNode, entity.kind == .centipedeHead else { return }
+            self.updateCentipedeHead(node, dt: dt)
+        }
+        scene.rootNode.enumerateChildNodes { node, _ in
+            guard let entity = node as? EntityNode, entity.kind == .centipedeSegment else { return }
+            self.updateCentipedeSegment(node, dt: dt)
+        }
+        
         updateEntities(dt: dt)
         updateLasers(dt: dt)
 
@@ -3121,4 +3209,3 @@ struct ContentView: View {
         .background(Color.black)
     }
 }
-
