@@ -1458,15 +1458,12 @@ func setupGestures() {
 
     func spawnMushroomFunc(at worldPosition: SCNVector3) {
 
-        let geo = SCNCylinder(
-            radius: 0.18,
-            height: 0.25
+        let size = cubeSize * 1.1
+        let geo = makeLabelBillboard(
+            text: "🍄",
+            color: .white,
+            worldSize: size
         )
-
-        geo.firstMaterial?.diffuse.contents = UIColor.systemGreen
-        geo.firstMaterial?.emission.contents =
-            UIColor.systemGreen.withAlphaComponent(0.2)
-
 
         let node = EntityNode(
             kind: .mushroom,
@@ -1474,34 +1471,23 @@ func setupGestures() {
         )
 
         node.name = "mushroom"
-
         node.position = worldPosition
-
+        node.renderingOrder = 90
 
         let body = SCNPhysicsBody(
             type: .static,
-            shape: SCNPhysicsShape(
-                geometry: geo,
-                options: nil
-            )
+            shape: labelPhysicsShape(size: size)
         )
 
-
-        body.categoryBitMask =
-            PhysicsCategory.mushroom
-
-
-        body.contactTestBitMask =
-            PhysicsCategory.laser |
-            PhysicsCategory.missile
-
-
-        body.collisionBitMask =
-            PhysicsCategory.none
-
+        body.categoryBitMask = PhysicsCategory.mushroom
+        body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.missile
+        body.collisionBitMask = PhysicsCategory.none
 
         node.physicsBody = body
-
+        node.constraints = [SCNBillboardConstraint()]
+        if let billboard = node.constraints?.first as? SCNBillboardConstraint {
+            billboard.freeAxes = .all
+        }
 
         enemyRoot.addChildNode(node)
     }
@@ -1536,8 +1522,6 @@ func setupGestures() {
         //--------------------------------------------------
 
         node.removeFromParentNode()
-
-
 
         //--------------------------------------------------
         // CUBE DESTROYED
