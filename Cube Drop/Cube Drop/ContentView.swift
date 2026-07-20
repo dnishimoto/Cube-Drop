@@ -581,7 +581,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     override func viewDidLoad() {
         super.viewDidLoad()
         setupScene()
-        setupPlayer()
+        //setupPlayer()
         setupPlayerPlatform()
         setupLighting()
         setupCamera()
@@ -689,21 +689,28 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     func setupCamera() {
         let camera = SCNCamera()
-        camera.fieldOfView = 50
-        camera.zFar = 120
+        camera.fieldOfView = 35
+        camera.zFar = 180
         cameraNode.camera = camera
 
-        // Compute vertical center of the grid
         let pitch = Float(cubeSize + cubeSpacing)
-        let centerY = groundY + 3.0 + Float(gridHeight) / 2.0 * pitch
+        let bottomCubeY = groundY + 3.0 + pitch * 0.5
 
-        // Position the camera out in front of the grid
-        cameraNode.position = SCNVector3(0, centerY, 16)
+        let anchor = platformNode?.presentation.worldPosition ?? laserWorldPosition()
 
-        // Target point: center of the grid in X and Y, at Z = 0
-        let lookAtPoint = SCNVector3(0, centerY - 2, 0)
+        cameraNode.position = SCNVector3(
+            anchor.x,
+            anchor.y - 0.15,
+            14.0
+        )
+
+        let lookAtPoint = SCNVector3(
+            anchor.x,
+            bottomCubeY + 0.35,
+            wallZ
+        )
+
         cameraNode.look(at: lookAtPoint)
-
         scene.rootNode.addChildNode(cameraNode)
     }
     @discardableResult
@@ -975,28 +982,28 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     }
 
     func setupWorld() {
-        let floor = SCNFloor()
-        floor.firstMaterial?.diffuse.contents = UIColor.darkGray
+        let floorGeo = SCNBox(width: 200, height: 0.1, length: 200, chamferRadius: 0)
+        floorGeo.firstMaterial?.diffuse.contents = UIColor.darkGray
+        floorGeo.firstMaterial?.emission.contents = UIColor.black
+        floorGeo.firstMaterial?.reflective.contents = UIColor.black
 
-        let floorNode = SCNNode(geometry: floor)
-        floorNode.position = SCNVector3(0, groundY, 0)
+        let floorNode = SCNNode(geometry: floorGeo)
+        floorNode.position = SCNVector3(0, groundY - 0.05, 0)
 
-        let body = SCNPhysicsBody(type: .static, shape: SCNPhysicsShape(geometry: SCNBox(width: 200, height: 0.1, length: 200, chamferRadius: 0), options: nil))
+        let body = SCNPhysicsBody(
+            type: .static,
+            shape: SCNPhysicsShape(geometry: floorGeo, options: nil)
+        )
         body.categoryBitMask = PhysicsCategory.ground
-
         body.contactTestBitMask =
             PhysicsCategory.laser |
             PhysicsCategory.missile |
             PhysicsCategory.pointObject
-
-        body.collisionBitMask =
-            PhysicsCategory.none
+        body.collisionBitMask = PhysicsCategory.none
 
         floorNode.physicsBody = body
-
         scene.rootNode.addChildNode(floorNode)
     }
-
     func setupGrid() {
         slots.removeAll()
         slotMap.removeAll()
