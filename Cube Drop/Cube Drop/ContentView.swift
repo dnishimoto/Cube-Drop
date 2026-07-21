@@ -155,6 +155,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     var cameraPitch: Float = -0.12
     var removeLaserList: [SCNNode] = []
     var spidersToRemove: [SCNNode] = []
+    var spiderThreadsToRemove: [SCNNode] = []
+    var spiderAnchorsToRemove: [ObjectIdentifier] = []
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -1467,7 +1469,6 @@ func setupGestures() {
     func removeGrasshoppers() {
         for grasshopper in self.grasshoppersToRemove {
             guard let kind = kind(of: grasshopper) else { continue }
-            cleanupTrackingState(for: grasshopper, kind: kind)
             spawnExplosion(at: grasshopper.presentation.worldPosition, color: .brown)
             grasshopper.removeFromParentNode()
         }
@@ -2317,8 +2318,6 @@ func setupGestures() {
 
         updateEntities(dt: dt)
         updateLasers(dt: dt)
-        
-
 
         scene.rootNode.enumerateChildNodes { node, _ in
             guard let entity = node as? EntityNode, entity.kind == .fly else { return }
@@ -2424,10 +2423,23 @@ func setupGestures() {
         let speed: Float = 0.55 * Float(gameState.difficulty)
         node.position.y -= speed * Float(dt)
 
+        if let player = playerNode {
+            let dist = distanceBetween(
+                node.presentation.worldPosition,
+                player.presentation.worldPosition
+            )
+
+            if dist < 0.45 {
+                triggerGameOverFromEnemyContact(node: node, at: player.presentation.worldPosition)
+                return
+            }
+        }
+
+
         updateSpiderThread(for: node)
 
         if node.position.y < groundY - 1 {
-            removeSpiderThread(for: node)
+            //removeSpiderThread(for: node)
             spidersToRemove.append(node)
         }
     }
@@ -2435,7 +2447,17 @@ func setupGestures() {
         for spider in spidersToRemove {
             spider.removeFromParentNode()
         }
+        for thread in spiderThreadsToRemove {
+            thread.removeFromParentNode()
+        }
+        for id in spiderAnchorsToRemove {
+            spiderThreads.removeValue(forKey: id)
+            spiderAnchorY.removeValue(forKey: id)
+        }
+
         spidersToRemove.removeAll()
+        spiderThreadsToRemove.removeAll()
+        spiderAnchorsToRemove.removeAll()
     }
     func updateSpiderThread(for spider: SCNNode) {
         let id = ObjectIdentifier(spider)
@@ -2460,14 +2482,25 @@ func setupGestures() {
         thread.scale = SCNVector3(1, length, 1)
         thread.position = SCNVector3(current.x, anchorY - length / 2, current.z)
     }
-
+    func queueSpiderRemoval(_ spider: SCNNode) {
+        let id = ObjectIdentifier(spider)
+        spidersToRemove.append(spider)
+        if let thread = spiderThreads[id] {
+            spiderThreadsToRemove.append(thread)
+        }
+        spiderAnchorsToRemove.append(id)
+    }
     func removeSpiderThread(for spider: SCNNode) {
         let id = ObjectIdentifier(spider)
+
+        guard spiderThreads[id] != nil || spiderAnchorY[id] != nil else {
+            return
+        }
+
         spiderThreads[id]?.removeFromParentNode()
         spiderThreads.removeValue(forKey: id)
         spiderAnchorY.removeValue(forKey: id)
     }
-
     //---------------------------------------------------------
     // LADYBUG AI
     // Descends gradually while drifting side to side, bouncing
