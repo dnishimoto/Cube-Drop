@@ -37,452 +37,7 @@ import UIKit
 import Combine
 import AudioToolbox
 
-//======================================================================
-// SOUND SYSTEM
-// Lightweight wrapper around iOS system sounds so every important
-// action gets audible feedback without needing bundled audio assets.
-//======================================================================
 
-enum GameSound: SystemSoundID {
-    case laserFire      = 1104
-    case cubeHit        = 1105
-    case missileHit      = 1106
-    case enemyDestroyed = 1111
-    case bonus          = 1025
-    case gameOver        = 1073
-}
-
-func playSound(_ id: SystemSoundID) {
-    AudioServicesPlaySystemSound(id)
-}
-
-
-final class KnowledgeTree {
-
-    enum EntityKind: String {
-
-        case playerLaser
-        case player
-
-        case cube
-        case pointObject
-        case bonusPointObject
-
-        case ufo
-        case missile
-
-        case centipedeHead
-        case centipedeSegment
-
-        case mushroom
-
-        case grasshopper
-        case spider
-        case ladybug
-        case fly
-    }
-
-
-    enum Behavior {
-
-        case blocksLaser
-        case blocksMissile
-
-        case destroyedByLaser
-        case destroyedByMissile
-
-        case fallsWithGravity
-
-        case awardsScore(Int)
-
-        case spawnsMushroom
-
-        case burstOnDestroy(radius: Float)
-
-        case causesGameOverOnContact
-
-        case pathfindingObstacle
-
-        case hostile
-        case friendly
-    }
-
-
-
-    struct NodeProfile {
-
-        let kind: EntityKind
-
-        var behaviors: [Behavior]
-
-        var scoreValue: Int = 0
-
-        var weakness: [EntityKind] = []
-
-        var canBeTargetedByLaser: Bool = false
-
-        var blocks: [EntityKind] = []
-    }
-
-
-
-    private(set) var profiles:
-        [EntityKind: NodeProfile] = [:]
-
-
-
-    init() {
-
-        register(
-            .fly,
-            behaviors: [
-                .hostile,
-                .destroyedByLaser,
-                .causesGameOverOnContact,
-                .awardsScore(90)
-            ],
-            scoreValue: 90,
-            weakness: [.playerLaser],
-            canBeTargetedByLaser: true
-        )
-        //--------------------------------------------------
-        // PLAYER LASER
-        //--------------------------------------------------
-
-        register(
-            .playerLaser,
-            behaviors: [
-                .friendly
-            ]
-        )
-
-
-
-        //--------------------------------------------------
-        // PLAYER
-        //--------------------------------------------------
-
-        register(
-            .player,
-            behaviors: [
-                .friendly
-            ]
-        )
-
-
-
-        //--------------------------------------------------
-        // CUBE
-        // Destroyed cubes drop a falling point object (handled
-        // explicitly in resolveHit, since the drop type is randomized
-        // between normal / bonus / reward-enemy).
-        //--------------------------------------------------
-
-        register(
-            .cube,
-            behaviors: [
-                .blocksLaser,
-                .destroyedByLaser,
-                .awardsScore(10)
-            ],
-            scoreValue: 10,
-            weakness: [
-                .playerLaser
-            ],
-            canBeTargetedByLaser: true,
-            blocks: [
-                .missile,
-                .centipedeSegment,
-                .grasshopper,
-                .spider
-            ]
-        )
-
-
-
-        //--------------------------------------------------
-        // POINT OBJECT
-        //--------------------------------------------------
-
-        register(
-            .pointObject,
-            behaviors: [
-                .fallsWithGravity,
-                .destroyedByLaser,
-                .awardsScore(5)
-            ],
-            scoreValue: 5,
-            weakness: [
-                .playerLaser
-            ],
-            canBeTargetedByLaser: true
-        )
-
-
-
-        //--------------------------------------------------
-        // BONUS POINT OBJECT
-        // Rare, high-value, bursts nearby point objects when destroyed.
-        //--------------------------------------------------
-
-        register(
-            .bonusPointObject,
-            behaviors: [
-                .fallsWithGravity,
-                .destroyedByLaser,
-                .awardsScore(100),
-                .burstOnDestroy(radius: 2.2)
-            ],
-            scoreValue: 100,
-            weakness: [
-                .playerLaser
-            ],
-            canBeTargetedByLaser: true
-        )
-
-
-
-        //--------------------------------------------------
-        // UFO
-        //--------------------------------------------------
-
-        register(
-            .ufo,
-            behaviors: [
-                .hostile,
-                .destroyedByLaser,
-                .awardsScore(300)
-            ],
-            scoreValue: 300,
-            weakness: [
-                .playerLaser
-            ],
-            canBeTargetedByLaser: true
-        )
-
-
-
-        //--------------------------------------------------
-        // MISSILE
-        //--------------------------------------------------
-
-        register(
-            .missile,
-            behaviors: [
-                .hostile,
-                .destroyedByLaser
-            ],
-            scoreValue: 0,
-            weakness: [
-                .playerLaser
-            ],
-            canBeTargetedByLaser: true
-        )
-
-
-
-        //--------------------------------------------------
-        // CENTIPEDE HEAD
-        //--------------------------------------------------
-
-        register(
-            .centipedeHead,
-            behaviors: [
-                .hostile,
-                .destroyedByLaser,
-                .spawnsMushroom,
-                .causesGameOverOnContact,
-                .awardsScore(50)
-            ],
-            scoreValue: 50,
-            weakness: [
-                .playerLaser
-            ],
-            canBeTargetedByLaser: true
-        )
-
-        //--------------------------------------------------
-        // CENTIPEDE SEGMENT
-        //--------------------------------------------------
-
-        register(
-            .centipedeSegment,
-            behaviors: [
-                .hostile,
-                .destroyedByLaser,
-                .spawnsMushroom,
-                .causesGameOverOnContact,
-                .awardsScore(25)
-            ],
-            scoreValue: 25,
-            weakness: [
-                .playerLaser
-            ],
-            canBeTargetedByLaser: true
-        )
-
-
-
-        //--------------------------------------------------
-        // MUSHROOM
-        //--------------------------------------------------
-
-        register(
-            .mushroom,
-            behaviors: [
-                .pathfindingObstacle,
-                .blocksLaser,
-                .destroyedByLaser
-            ],
-            scoreValue: 0,
-            weakness: [
-                .playerLaser
-            ],
-            canBeTargetedByLaser: true
-        )
-
-
-
-        //--------------------------------------------------
-        // GRASSHOPPER
-        //--------------------------------------------------
-
-        register(
-            .grasshopper,
-            behaviors: [
-                .hostile,
-                .destroyedByLaser,
-                .causesGameOverOnContact,
-                .awardsScore(80)
-            ],
-            scoreValue: 80,
-            weakness: [
-                .playerLaser
-            ],
-            canBeTargetedByLaser: true
-        )
-
-
-
-        //--------------------------------------------------
-        // SPIDER
-        //--------------------------------------------------
-
-        register(
-            .spider,
-            behaviors: [
-                .hostile,
-                .destroyedByLaser,
-                .causesGameOverOnContact,
-                .awardsScore(120)
-            ],
-            scoreValue: 120,
-            weakness: [
-                .playerLaser
-            ],
-            canBeTargetedByLaser: true
-        )
-
-
-
-        //--------------------------------------------------
-        // LADYBUG
-        // Slower, valuable, non-lethal target.
-        //--------------------------------------------------
-
-        register(
-            .ladybug,
-            behaviors: [
-                .hostile,
-                .destroyedByLaser,
-                .awardsScore(150)
-            ],
-            scoreValue: 150,
-            weakness: [
-                .playerLaser
-            ],
-            canBeTargetedByLaser: true
-        )
-    }
-
-
-
-    //--------------------------------------------------
-    // Register entity
-    //--------------------------------------------------
-
-    private func register(
-        _ kind: EntityKind,
-        behaviors: [Behavior],
-        scoreValue: Int = 0,
-        weakness: [EntityKind] = [],
-        canBeTargetedByLaser: Bool = false,
-        blocks: [EntityKind] = []
-    ) {
-
-        profiles[kind] = NodeProfile(
-            kind: kind,
-            behaviors: behaviors,
-            scoreValue: scoreValue,
-            weakness: weakness,
-            canBeTargetedByLaser: canBeTargetedByLaser,
-            blocks: blocks
-        )
-    }
-
-
-
-    //--------------------------------------------------
-    // Lookup
-    //--------------------------------------------------
-
-    func profile(
-        for kind: EntityKind
-    ) -> NodeProfile? {
-
-        profiles[kind]
-    }
-}
-
-struct PhysicsCategory {
-    static let none: Int = 0
-    static let laser: Int = 1 << 0
-    static let cube: Int = 1 << 1
-    static let pointObject: Int = 1 << 2
-    static let ufo: Int = 1 << 3
-    static let missile: Int = 1 << 4
-    static let centipedeHead: Int = 1 << 5
-    static let mushroom: Int = 1 << 6
-    static let grasshopper: Int = 1 << 7
-    static let spider: Int = 1 << 8
-    static let ladybug: Int = 1 << 9
-    static let ground: Int = 1 << 10
-    static let centipedeSegment: Int = 1 << 11
-    static let player: Int = 1 << 12
-    static let fly: Int = 1 << 13
-}
-
-final class GameState: ObservableObject {
-    @Published var score: Int = 0
-    @Published var combo: Int = 0
-    @Published var isGameOver: Bool = false
-    @Published var difficulty: Double = 1.0
-}
-
-final class EntityNode: SCNNode {
-    let kind: KnowledgeTree.EntityKind
-
-    init(kind: KnowledgeTree.EntityKind, geometry: SCNGeometry? = nil) {
-        self.kind = kind
-        super.init()
-        self.geometry = geometry
-        self.name = kind.rawValue
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-}
 
 final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNPhysicsContactDelegate, UIGestureRecognizerDelegate {
     let knowledge = KnowledgeTree()
@@ -493,7 +48,15 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     init(gameState: GameState) {
         self.gameState = gameState
+
         super.init(nibName: nil, bundle: nil)
+        self.gameState.cameraLower = { [weak self] in
+            self?.cameraLower()
+        }
+
+        self.gameState.cameraRaise = { [weak self] in
+            self?.cameraRaise()
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -544,6 +107,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     var cubeSpacing: CGFloat = 0.06
     var groundY: Float = -6.0
     var wallZ: Float = 0.0
+    
+    var fliesToRemove: [SCNNode] = []
 
     var gridWidth: Int = 16
     var gridHeight: Int = 4
@@ -563,6 +128,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     // Grasshopper AI state
     var grasshopperJumping = Set<ObjectIdentifier>()
+    var grasshoppersToRemove: [SCNNode] = []
 
     // Centipede AI state
     var centipedeDirection: [ObjectIdentifier: Float] = [:]
@@ -574,17 +140,26 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     // Ladybug AI state
     var ladybugDirection: [ObjectIdentifier: Float] = [:]
+    var removeLadybugList: [SCNNode] = []
 
     private var slashStartScreenPoint: CGPoint?
     private var slashEndScreenPoint: CGPoint?
     
     var flyWobble: [ObjectIdentifier: Float] = [:]
     var flyChaos: [ObjectIdentifier: Float] = [:]
+    
+    var cameraTarget = SCNVector3(0, 0, 0)
+    var cameraDistance: Float = 16
+    var cameraHeight: Float = -5
+    var cameraYaw: Float = 0
+    var cameraPitch: Float = -0.12
+    var removeLaserList: [SCNNode] = []
+    var spidersToRemove: [SCNNode] = []
 
     override func viewDidLoad() {
         super.viewDidLoad()
         setupScene()
-        //setupPlayer()
+        setupPlayer()
         setupPlayerPlatform()
         setupLighting()
         setupCamera()
@@ -618,38 +193,24 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         scene.rootNode.addChildNode(effectsRoot)
     }
     func setupPlayer() {
-
-        let geo = SCNCapsule(
-            capRadius: 0.25,
-            height: 0.8
-        )
-
-        geo.firstMaterial?.diffuse.contents = UIColor.cyan
-        geo.firstMaterial?.emission.contents = UIColor.cyan
+        let size = cubeSize * 1.4
+        let icon = makeLabelBillboard(text: "🧍", color: .cyan, worldSize: size)
 
         let player = EntityNode(
             kind: .player,
-            geometry: geo
+            geometry: icon
         )
 
         player.name = "player"
-
-        player.position = SCNVector3(
-            0,
-            groundY + 0.4,
-            wallZ
-        )
+        player.position = SCNVector3(0, groundY + 0.4, wallZ)
+        player.scale = SCNVector3(1.1, 1.1, 1.1)
 
         let body = SCNPhysicsBody(
             type: .kinematic,
-            shape: SCNPhysicsShape(
-                geometry: geo,
-                options: nil
-            )
+            shape: labelPhysicsShape(size: size)
         )
 
         body.categoryBitMask = PhysicsCategory.player
-
         body.contactTestBitMask =
             PhysicsCategory.missile |
             PhysicsCategory.grasshopper |
@@ -660,12 +221,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             PhysicsCategory.fly
 
         body.collisionBitMask = PhysicsCategory.none
-
         player.physicsBody = body
 
-        // Save a reference for AI (grasshopper, spider, etc.)
         playerNode = player
-
         scene.rootNode.addChildNode(player)
     }
     
@@ -692,30 +250,58 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     func setupCamera() {
         let camera = SCNCamera()
-        camera.fieldOfView = 35
-        camera.zFar = 180
+        camera.fieldOfView = 50
+        camera.zFar = 120
         cameraNode.camera = camera
 
-        let pitch = Float(cubeSize + cubeSpacing)
-        let bottomCubeY = groundY + 3.0 + pitch * 0.5
+        scene.rootNode.addChildNode(cameraNode)
+        updateCamera()
+    }
+    /*
+    func cameraRotateRight() {
+        cameraYaw += 0.5
+        updateCamera()
+    }
+    */
+    func cameraLower() {
+        if cameraHeight-1 < -5 { return }
+        cameraHeight -= 1
+        updateCamera()
+    }
 
-        let anchor = platformNode?.presentation.worldPosition ?? laserWorldPosition()
+    func cameraRaise() {
+        if cameraHeight-1 > 10 { return }
+        cameraHeight += 1
+        updateCamera()
+    }
+    func updateCamera() {
+        let x = cameraTarget.x + sin(cameraYaw) * cameraDistance
+        let z = cameraTarget.z + cos(cameraYaw) * cameraDistance
+        let y = cameraTarget.y + cameraHeight + cameraPitch
 
-        cameraNode.position = SCNVector3(
-            anchor.x,
-            anchor.y - 0.15,
-            18.0
-        )
+        cameraNode.position = SCNVector3(x, y, z)
+        cameraNode.look(at: cameraTarget)
+    }
+    func updatePlayer() {
+        guard let player = playerNode else { return }
 
+        let targetX = laserWorldPosition().x
+        let current = player.position
 
-        let lookAtPoint = SCNVector3(
-            anchor.x,
-            bottomCubeY + 0.35,
+        let smoothing: Float = 0.22
+        let newX = current.x + (targetX - current.x) * smoothing
+
+        player.position = SCNVector3(
+            newX,
+            groundY + 0.4,
             wallZ
         )
 
-        cameraNode.look(at: lookAtPoint)
-        scene.rootNode.addChildNode(cameraNode)
+        player.physicsBody?.resetTransform()
+
+        if let platform = platformNode {
+            platform.position.x = newX
+        }
     }
     @discardableResult
     func spawnCentipedeHead(at worldPosition: SCNVector3) -> SCNNode {
@@ -1878,57 +1464,54 @@ func setupGestures() {
             near.z + (far.z - near.z) * t
         )
     }
-
+    func removeGrasshoppers() {
+        for grasshopper in self.grasshoppersToRemove {
+            guard let kind = kind(of: grasshopper) else { continue }
+            cleanupTrackingState(for: grasshopper, kind: kind)
+            spawnExplosion(at: grasshopper.presentation.worldPosition, color: .brown)
+            grasshopper.removeFromParentNode()
+        }
+    }
     func updateGrasshopper(_ grasshopper: SCNNode) {
         let id = ObjectIdentifier(grasshopper)
 
-        if grasshopperJumping.contains(id) {
-            return
-        }
-
+        guard grasshopper.parent != nil else { return }
+        guard !grasshopperJumping.contains(id) else { return }
         guard let player = playerNode else { return }
-
-        let currentPos = grasshopper.presentation.worldPosition
-        let playerDistance = distanceBetween(currentPos, player.presentation.worldPosition)
-
-        let directLeapDistance: Float = 1.8
 
         grasshopperJumping.insert(id)
 
-        // 1. Direct leap to player if close enough
+        let currentPos = grasshopper.presentation.worldPosition
+        let playerDistance = distanceBetween(currentPos, player.presentation.worldPosition)
+        let directLeapDistance: Float = 1.8
+
+        let finishRemove: () -> Void = { [weak self] in
+            self?.grasshopperJumping.remove(id)
+        }
+
         if playerDistance < directLeapDistance {
-            arcJump(
-                grasshopper: grasshopper,
-                target: player.presentation.worldPosition
-            ) { [weak self] in
+            arcJump(grasshopper: grasshopper, target: player.presentation.worldPosition) { [weak self] in
                 guard let self = self else { return }
                 self.grasshopperJumping.remove(id)
-                self.checkGrasshopperLanding(grasshopper)
+                if grasshopper.parent != nil {
+                    self.checkGrasshopperLanding(grasshopper)
+                }
             }
             return
         }
 
-        // 2. Try to hop to the best reachable cube
         if let targetCube = nextJumpTarget(from: grasshopper, toward: player) {
             let cubePos = targetCube.presentation.worldPosition
-            let landing = SCNVector3(
-                cubePos.x,
-                cubePos.y + Float(cubeSize) * 0.6,
-                cubePos.z
-            )
+            let landing = SCNVector3(cubePos.x, cubePos.y + Float(cubeSize) * 0.6, cubePos.z)
 
-            arcJump(
-                grasshopper: grasshopper,
-                target: landing
-            ) { [weak self] in
+            arcJump(grasshopper: grasshopper, target: landing) { [weak self] in
                 self?.grasshopperJumping.remove(id)
             }
             return
         }
 
-        // 3. NO reachable cube → Fall to the ground
-        grasshopperJumping.remove(id)
-        fallToGround(grasshopper)
+        //finishRemove()
+        grasshoppersToRemove.append(grasshopper)
     }
  
     func checkGrasshopperLanding(
@@ -2072,38 +1655,31 @@ func setupGestures() {
         }
     }
     func updateLasers(dt: TimeInterval) {
-
         let speed: Float = 18.0
-
+        var removeLaserList: [SCNNode] = []
 
         for laser in activeLasers {
-
             guard laser.parent != nil else {
+                removeLaserList.append(laser)
                 continue
             }
 
-
             laser.position.y += Float(dt) * speed
-
-
-            // keep physics body synchronized
             laser.physicsBody?.resetTransform()
 
-
-            // remove if above arena
             if laser.position.y > groundY + 20 {
-
-                laser.removeFromParentNode()
-
+                removeLaserList.append(laser)
             }
         }
 
-
-        activeLasers.removeAll {
-            $0.parent == nil
+}
+    func removeLasers() {
+        for laser in removeLaserList {
+            laser.physicsBody = nil
+            laser.removeFromParentNode()
         }
+        removeLaserList.removeAll()
     }
-
     //--------------------------------------------------
     // Cleanup pass for entities whose movement is driven elsewhere
     // (SCNActions for missile/UFO, dedicated AI functions for
@@ -2674,42 +2250,25 @@ func setupGestures() {
 
         enemyRoot.addChildNode(fly)
     }
-    func updateFly(_ fly: SCNNode, dt: TimeInterval) {
+    func updateFly(_ fly: SCNNode, dt: TimeInterval, removalList: inout [SCNNode]) {
         let id = ObjectIdentifier(fly)
         guard let wobble = flyWobble[id], let chaos = flyChaos[id] else { return }
-        guard let player = playerNode else { return }
 
         var pos = fly.position
-        let playerPos = player.presentation.worldPosition
         let time = Float(Date().timeIntervalSince1970)
 
-        let seekX = playerPos.x - pos.x
-        let seekY = playerPos.y - pos.y
-
-        let seekForceX = max(-1.0, min(1.0, seekX * 0.35))
-        let seekForceY = max(-0.8, min(0.8, seekY * 0.12))
-
-        let zig = sin(time * chaos) * 4.5
-        let zig2 = sin(time * (chaos * 1.7) + 1.4) * 2.2
-        let jitter = Float.random(in: -0.6...0.6)
-
-        pos.x += (seekForceX + zig + zig2 + jitter) * Float(dt)
-        pos.y += (seekForceY - 1.35 + sin(time * wobble) * 1.1) * Float(dt)
-
-        if Int.random(in: 0...50) == 0 {
-            flyChaos[id] = Float.random(in: 2.5...5.8)
-            flyWobble[id] = Float.random(in: 10...18)
-        }
+        pos.x += sin(time * chaos) * 2.8 * Float(dt)
+        pos.y -= 1.2 * Float(dt)
+        pos.y += sin(time * wobble) * 0.9 * Float(dt)
 
         let bound: Float = 8.5
         pos.x = max(-bound, min(bound, pos.x))
-
         fly.position = pos
 
         if pos.y < groundY - 2 {
             flyWobble.removeValue(forKey: id)
             flyChaos.removeValue(forKey: id)
-            fly.removeFromParentNode()
+            removalList.append(fly)
         }
     }
     func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
@@ -2719,6 +2278,8 @@ func setupGestures() {
 
         // updateDifficulty()
         // if allCubesGone() { respawnAllCubes() }
+        
+        updatePlayer()
 
         updateGrid(dt: dt)
 
@@ -2734,13 +2295,16 @@ func setupGestures() {
                 self.updateSpider(entity, dt: dt)
             case .ladybug:
                 self.updateLadybugMovement(entity, dt: dt)
-            case .fly:
-                self.updateFly(entity, dt: dt)
             default:
                 break
             }
         }
-
+        removeGrasshoppers()
+        removeLasers()
+        removeLadybugs()
+        removeSpiders()
+        
+        
         scene.rootNode.enumerateChildNodes { node, _ in
             guard let entity = node as? EntityNode, entity.kind == .centipedeHead else { return }
             self.updateCentipedeHead(node, dt: dt)
@@ -2754,9 +2318,15 @@ func setupGestures() {
         updateEntities(dt: dt)
         updateLasers(dt: dt)
         
+
+
         scene.rootNode.enumerateChildNodes { node, _ in
             guard let entity = node as? EntityNode, entity.kind == .fly else { return }
-            self.updateFly(entity, dt: dt)
+            self.updateFly(entity, dt: dt, removalList: &fliesToRemove)
+        }
+
+        for fly in fliesToRemove {
+            fly.removeFromParentNode()
         }
 
         if autoFireEnabled, time - lastAutoFireTime >= autoFireInterval {
@@ -2858,10 +2428,15 @@ func setupGestures() {
 
         if node.position.y < groundY - 1 {
             removeSpiderThread(for: node)
-            node.removeFromParentNode()
+            spidersToRemove.append(node)
         }
     }
-
+    func removeSpiders() {
+        for spider in spidersToRemove {
+            spider.removeFromParentNode()
+        }
+        spidersToRemove.removeAll()
+    }
     func updateSpiderThread(for spider: SCNNode) {
         let id = ObjectIdentifier(spider)
         guard let anchorY = spiderAnchorY[id] else { return }
@@ -2928,10 +2503,15 @@ func setupGestures() {
 
         if pos.y < groundY - 1 {
             ladybugDirection.removeValue(forKey: id)
-            node.removeFromParentNode()
+            removeLadybugList.append(node)
         }
     }
-
+    func removeLadybugs() {
+        for ladybug in removeLadybugList {
+            ladybug.removeFromParentNode()
+        }
+        removeLadybugList.removeAll()
+    }
     func spawnGrasshopper() {
         let size = cubeSize * 1.35
         
@@ -3156,6 +2736,12 @@ struct ContentView: View {
                     Text("Combo: \(gameState.combo)x")
                         .font(.subheadline)
                         .foregroundColor(.cyan)
+                    HStack {
+                        Button("Lower Camera") { gameState.cameraLower?() }
+                        Spacer()
+                        Button("Raise Camera") { gameState.cameraRaise?() }
+                    }
+
                 }
                 .padding()
                 Spacer()

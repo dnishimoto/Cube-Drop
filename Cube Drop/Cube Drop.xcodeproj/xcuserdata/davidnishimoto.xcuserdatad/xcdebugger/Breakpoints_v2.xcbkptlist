@@ -14,8 +14,8 @@
             filePath = "Cube Drop/ContentView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "967"
-            endingLineNumber = "967"
+            startingLineNumber = "553"
+            endingLineNumber = "553"
             landmarkName = "spawnRewardEnemy(at:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -30,8 +30,8 @@
             filePath = "Cube Drop/ContentView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "2555"
-            endingLineNumber = "2555"
+            startingLineNumber = "2131"
+            endingLineNumber = "2131"
             landmarkName = "updateCentipedeHead(_:dt:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -46,8 +46,8 @@
             filePath = "Cube Drop/ContentView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "2565"
-            endingLineNumber = "2565"
+            startingLineNumber = "2141"
+            endingLineNumber = "2141"
             landmarkName = "updateCentipedeHead(_:dt:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -62,8 +62,8 @@
             filePath = "Cube Drop/ContentView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "2562"
-            endingLineNumber = "2562"
+            startingLineNumber = "2138"
+            endingLineNumber = "2138"
             landmarkName = "updateCentipedeHead(_:dt:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -78,8 +78,8 @@
             filePath = "Cube Drop/ContentView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "2563"
-            endingLineNumber = "2563"
+            startingLineNumber = "2139"
+            endingLineNumber = "2139"
             landmarkName = "updateCentipedeHead(_:dt:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -94,8 +94,24 @@
             filePath = "Cube Drop/ContentView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "2775"
-            endingLineNumber = "2775"
+            startingLineNumber = "2345"
+            endingLineNumber = "2345"
+            landmarkName = "renderer(_:updateAtTime:)"
+            landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "8F8B001B-B916-4A8E-88D3-AB4F862FE209"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "Cube Drop/ContentView.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "2293"
+            endingLineNumber = "2293"
             landmarkName = "renderer(_:updateAtTime:)"
             landmarkType = "7">
          </BreakpointContent>
