@@ -61,6 +61,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+        
     }
 
     struct CubeSlot {
@@ -77,7 +78,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     
     func topOfGridY() -> Float {
     let pitch = Float(cubeSize + cubeSpacing)
-    return groundY + 3.0 + Float(gridHeight - 1) * pitch
+    return groundY + cubeDistanceFromGround + Float(gridHeight - 1) * pitch
     }
     var pointObjectSpawnChance: Int = 18
     var centipedeFollowTarget: [ObjectIdentifier: SCNNode] = [:]
@@ -157,6 +158,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     var spidersToRemove: [SCNNode] = []
     var spiderThreadsToRemove: [SCNNode] = []
     var spiderAnchorsToRemove: [ObjectIdentifier] = []
+    
+    var cubeDistanceFromGround: Float = 5.0
+    @State var topY : Float = 0
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -193,7 +197,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         scene.rootNode.addChildNode(gridRoot)
         scene.rootNode.addChildNode(enemyRoot)
         scene.rootNode.addChildNode(effectsRoot)
+ 
     }
+   
     func setupPlayer() {
         let size = cubeSize * 1.4
         let icon = makeLabelBillboard(text: "🧍", color: .cyan, worldSize: size)
@@ -506,7 +512,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     }
 
     func spiderSpawnY() -> Float {
-        groundY + 3.0 + Float(gridHeight) * Float(cubeSize + cubeSpacing) + 1.5
+        groundY + cubeDistanceFromGround + Float(gridHeight) * Float(cubeSize + cubeSpacing) + 1.5
     }
 
     func spawnSpider() {
@@ -603,7 +609,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         let pitch = cubeSize + cubeSpacing
         let totalWidth = CGFloat(gridWidth) * pitch
         let originX = -Float(totalWidth) / 2 + Float(pitch) / 2
-        let originY = groundY + 3.0
+        let originY = groundY + cubeDistanceFromGround
 
         for row in 0..<gridHeight {
             var rowSlots: [CubeSlot] = []
@@ -2553,7 +2559,7 @@ func setupGestures() {
         
         let grasshopper = EntityNode(kind: .grasshopper, geometry: plane)
         grasshopper.name = "Grasshopper"
-        grasshopper.position = SCNVector3(0, groundY + 5.5, 0)
+        grasshopper.position = SCNVector3(0, topOfGridY(), 0)
         grasshopper.renderingOrder = 115
         grasshopper.scale = SCNVector3(1.15, 1.15, 1.15)   // Make it more visible
         
@@ -2585,7 +2591,7 @@ func setupGestures() {
         geo.firstMaterial?.emission.contents = UIColor.systemPurple.withAlphaComponent(0.4)
 
         let ufo = EntityNode(kind: .ufo, geometry: geo)
-        ufo.position = SCNVector3(-8, groundY + 8.0, 0)
+        ufo.position = SCNVector3(-8, topOfGridY() + 3.0, 0)
 
         let body = SCNPhysicsBody(type: .kinematic, shape: SCNPhysicsShape(geometry: geo, options: nil))
         body.categoryBitMask = PhysicsCategory.ufo

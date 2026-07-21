@@ -14,8 +14,8 @@
             filePath = "Cube Drop/ContentView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "555"
-            endingLineNumber = "555"
+            startingLineNumber = "561"
+            endingLineNumber = "561"
             landmarkName = "spawnRewardEnemy(at:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -30,8 +30,8 @@
             filePath = "Cube Drop/ContentView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "2132"
-            endingLineNumber = "2132"
+            startingLineNumber = "2138"
+            endingLineNumber = "2138"
             landmarkName = "updateCentipedeHead(_:dt:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -46,8 +46,8 @@
             filePath = "Cube Drop/ContentView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "2142"
-            endingLineNumber = "2142"
+            startingLineNumber = "2148"
+            endingLineNumber = "2148"
             landmarkName = "updateCentipedeHead(_:dt:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -62,8 +62,8 @@
             filePath = "Cube Drop/ContentView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "2139"
-            endingLineNumber = "2139"
+            startingLineNumber = "2145"
+            endingLineNumber = "2145"
             landmarkName = "updateCentipedeHead(_:dt:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -78,8 +78,8 @@
             filePath = "Cube Drop/ContentView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "2140"
-            endingLineNumber = "2140"
+            startingLineNumber = "2146"
+            endingLineNumber = "2146"
             landmarkName = "updateCentipedeHead(_:dt:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -94,8 +94,8 @@
             filePath = "Cube Drop/ContentView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "2344"
-            endingLineNumber = "2344"
+            startingLineNumber = "2350"
+            endingLineNumber = "2350"
             landmarkName = "renderer(_:updateAtTime:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -110,9 +110,41 @@
             filePath = "Cube Drop/ContentView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "2294"
-            endingLineNumber = "2294"
+            startingLineNumber = "2300"
+            endingLineNumber = "2300"
             landmarkName = "renderer(_:updateAtTime:)"
+            landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "17641F90-26DF-4D96-8513-68CA8C9390D3"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "Cube Drop/ContentView.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "2560"
+            endingLineNumber = "2560"
+            landmarkName = "spawnGrasshopper()"
+            landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "BAC80B7E-5A18-4E19-8140-B350509F9B33"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "Cube Drop/ContentView.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "2562"
+            endingLineNumber = "2562"
+            landmarkName = "spawnGrasshopper()"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
