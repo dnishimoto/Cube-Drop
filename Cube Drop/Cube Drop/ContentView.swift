@@ -609,7 +609,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         let pitch = cubeSize + cubeSpacing
         let totalWidth = CGFloat(gridWidth) * pitch
         let originX = -Float(totalWidth) / 2 + Float(pitch) / 2
-        let originY = groundY + cubeDistanceFromGround
+        let originY = topOfGridY()
 
         for row in 0..<gridHeight {
             var rowSlots: [CubeSlot] = []
@@ -1492,13 +1492,9 @@ func setupGestures() {
         let playerDistance = distanceBetween(currentPos, player.presentation.worldPosition)
         let directLeapDistance: Float = 1.8
 
-        let finishRemove: () -> Void = { [weak self] in
-            self?.grasshopperJumping.remove(id)
-        }
-
         if playerDistance < directLeapDistance {
-            arcJump(grasshopper: grasshopper, target: player.presentation.worldPosition) { [weak self] in
-                guard let self = self else { return }
+            arcJump(grasshopper: grasshopper, target: player.presentation.worldPosition) { [weak self, weak grasshopper] in
+                guard let self = self, let grasshopper = grasshopper else { return }
                 self.grasshopperJumping.remove(id)
                 if grasshopper.parent != nil {
                     self.checkGrasshopperLanding(grasshopper)
@@ -1517,7 +1513,7 @@ func setupGestures() {
             return
         }
 
-        //finishRemove()
+        grasshopperJumping.remove(id)
         grasshoppersToRemove.append(grasshopper)
     }
  
@@ -1622,41 +1618,37 @@ func setupGestures() {
         }
     }
     func respawnAllCubes() {
-        // === IMPORTANT: Reset grid position and offset ===
-        gridRoot.position = SCNVector3Zero      // Reset vertical descent
+        gridRoot.position = SCNVector3Zero
         gridOffset = 0.0
-        gridDirection = 1.0                     // Reset direction to right
-        
-        // Clear all existing cubes
+        gridDirection = 1.0
+
         for row in 0..<slots.count {
             for col in 0..<slots[row].count {
                 if let current = slots[row][col].node {
                     current.removeFromParentNode()
                 }
-                // Reset slot state
                 slots[row][col].node = nil
                 slots[row][col].isRespawning = false
             }
         }
-        
+
         slotMap.removeAll()
-        
-        // Rebuild the grid at the ORIGINAL starting height
+
         let pitch = cubeSize + cubeSpacing
         let totalWidth = CGFloat(gridWidth) * pitch
         let originX = -Float(totalWidth) / 2 + Float(pitch) / 2
-        let originY = groundY + 3.0                     // ← Original Y position
-        
+        let originY = topOfGridY()
+
         for row in 0..<gridHeight {
             for col in 0..<gridWidth {
                 let x = originX + Float(col) * Float(pitch)
                 let y = originY + Float(row) * Float(pitch)
-                
+
                 let container = slots[row][col].container
                 container.position = SCNVector3(x, y, wallZ)
-                
+
                 var slot = slots[row][col]
-                loadCube(into: &slot, animated: false)   // Normal starting position
+                loadCube(into: &slot, animated: false)
                 slots[row][col] = slot
             }
         }
