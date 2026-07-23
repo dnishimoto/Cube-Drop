@@ -1516,7 +1516,18 @@ func setupGestures() {
         grasshopperJumping.remove(id)
         grasshoppersToRemove.append(grasshopper)
     }
- 
+    func removeAllSpiders() {
+        scene.rootNode.enumerateChildNodes { [weak self] node, _ in
+            guard let self = self else { return }
+            guard let kind = self.kind(of: node), kind == .spider else { return }
+
+            self.queueSpiderRemoval(node)
+        }
+
+        removeSpiders()
+    }
+
+
     func checkGrasshopperLanding(
         _ grasshopper: SCNNode
     ) {
@@ -1621,7 +1632,7 @@ func setupGestures() {
         gridRoot.position = SCNVector3Zero
         gridOffset = 0.0
         gridDirection = 1.0
-
+        removeAllSpiders()
         for row in 0..<slots.count {
             for col in 0..<slots[row].count {
                 if let current = slots[row][col].node {
