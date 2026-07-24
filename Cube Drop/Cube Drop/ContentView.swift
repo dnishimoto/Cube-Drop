@@ -561,6 +561,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             let headNode = spawnCentipedeHead(at: spawnPoint)
             let bodyNode1 = spawnCentipedeSegment(at: spawnPoint, follow: headNode)
             let bodyNode2 = spawnCentipedeSegment(at: spawnPoint, follow: bodyNode1)
+            let bodyNode3 = spawnCentipedeSegment(at: spawnPoint, follow: bodyNode2)
         }
     }
 
@@ -1524,9 +1525,15 @@ func setupGestures() {
             self.queueSpiderRemoval(node)
         }
 
-        removeSpiders()
-    }
+        for id in spiderAnchorsToRemove {
+            spiderThreads.removeValue(forKey: id)
+            spiderAnchorY.removeValue(forKey: id)
+        }
 
+        spidersToRemove.removeAll()
+        spiderThreadsToRemove.removeAll()
+        spiderAnchorsToRemove.removeAll()
+    }
 
     func checkGrasshopperLanding(
         _ grasshopper: SCNNode
@@ -1628,42 +1635,136 @@ func setupGestures() {
             }
         }
     }
+    func removeAllEntities() {
+        scene.rootNode.enumerateChildNodes { [weak self] node, _ in
+            guard let self = self else { return }
+            guard let kind = self.kind(of: node) else { return }
+
+            switch kind {
+            case .spider:
+                self.queueSpiderRemoval(node)
+
+            case .ladybug:
+                self.removeLadybugList.append(node)
+
+            case .grasshopper:
+                self.grasshoppersToRemove.append(node)
+
+            case .fly:
+                self.fliesToRemove.append(node)
+
+            case .missile:
+                self.removeLaserList.append(node)
+
+            case .centipedeHead, .centipedeSegment:
+                node.removeFromParentNode()
+
+            case .playerLaser, .ufo, .pointObject, .bonusPointObject, .mushroom, .cube:
+                node.removeFromParentNode()
+
+            case .player:
+                break
+            }
+        }
+
+        removeAllSpiderThreadsAndAnchors()
+
+        removeLadybugs()
+        removeGrasshoppers()
+        removeSpiders()
+
+        for laser in removeLaserList {
+            laser.removeFromParentNode()
+        }
+        removeLaserList.removeAll()
+
+        for fly in fliesToRemove {
+            fly.removeFromParentNode()
+        }
+        fliesToRemove.removeAll()
+    }
+    func removeAllSpiderThreadsAndAnchors() {
+     
+        scene.rootNode.enumerateChildNodes { [weak self] node, _ in
+            guard let self = self else { return }
+            guard let kind = self.kind(of: node), kind == .spider else { return }
+
+            let id = ObjectIdentifier(node)
+            if let thread = spiderThreads[id] {
+                    spiderThreadsToRemove.append(thread)
+                }
+            self.spidersToRemove.append(node)
+            //self.spiderAnchorsToRemove.append(id)
+
+        }
+    }
     func respawnAllCubes() {
+        // Prevent spawns and updates from racing this reset pass
+        let previousAutoFire = autoFireEnabled
+        autoFireEnabled = false
+
+        // Reset grid movement state
         gridRoot.position = SCNVector3Zero
         gridOffset = 0.0
         gridDirection = 1.0
-        removeAllSpiders()
-        for row in 0..<slots.count {
-            for col in 0..<slots[row].count {
-                if let current = slots[row][col].node {
-                    current.removeFromParentNode()
-                }
-                slots[row][col].node = nil
-                slots[row][col].isRespawning = false
-            }
-        }
 
+        // Stop any queued removals and immediately clear spider threads/anchors
+        removeAllSpiderThreadsAndAnchors()
+
+        // Remove everything under enemy/effects/grid roots
+        enemyRoot.childNodes.forEach { $0.removeFromParentNode() }
+        effectsRoot.childNodes.forEach { $0.removeFromParentNode() }
+        gridRoot.childNodes.forEach { $0.removeFromParentNode() }
+
+        // Remove any stray lasers
+        activeLasers.forEach { $0.removeFromParentNode() }
+        activeLasers.removeAll()
+        removeLaserList.removeAll()
+
+        // Remove player and platform if present
+        playerNode?.removeFromParentNode()
+        platformNode?.removeFromParentNode()
+        playerNode = nil
+        platformNode = nil
+
+        // Clear tracking state
+        grasshopperJumping.removeAll()
+        grasshoppersToRemove.removeAll()
+        centipedeDirection.removeAll()
+        centipedeDropping.removeAll()
+        ladybugDirection.removeAll()
+        removeLadybugList.removeAll()
+        fliesToRemove.removeAll()
+        spiderThreads.removeAll()
+        spiderAnchorY.removeAll()
+        spidersToRemove.removeAll()
+        spiderThreadsToRemove.removeAll()
+        spiderAnchorsToRemove.removeAll()
+
+        // Reset cube data (containers will be recreated by setupGrid)
+        slots.removeAll()
         slotMap.removeAll()
 
-        let pitch = cubeSize + cubeSpacing
-        let totalWidth = CGFloat(gridWidth) * pitch
-        let originX = -Float(totalWidth) / 2 + Float(pitch) / 2
-        let originY = topOfGridY()
+        // Rebuild the grid fresh
+        setupGrid()
 
-        for row in 0..<gridHeight {
-            for col in 0..<gridWidth {
-                let x = originX + Float(col) * Float(pitch)
-                let y = originY + Float(row) * Float(pitch)
+        // Recreate essentials
+        setupPlayer()
+        setupPlayerPlatform()
 
-                let container = slots[row][col].container
-                container.position = SCNVector3(x, y, wallZ)
-
-                var slot = slots[row][col]
-                loadCube(into: &slot, animated: false)
-                slots[row][col] = slot
-            }
+        if cameraNode.parent == nil {
+            scene.rootNode.addChildNode(cameraNode)
         }
+        updateCamera()
+
+        // Align platform with current laser column
+        platformNode?.position.x = laserWorldPosition().x
+
+        // Resume auto-fire setting
+        autoFireEnabled = previousAutoFire
     }
+
+
     func updateLasers(dt: TimeInterval) {
         let speed: Float = 18.0
         var removeLaserList: [SCNNode] = []
