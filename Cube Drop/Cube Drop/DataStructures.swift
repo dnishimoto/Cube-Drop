@@ -38,6 +38,7 @@ final class KnowledgeTree {
 
         case playerLaser
         case player
+        case platform
 
         case cube
         case pointObject

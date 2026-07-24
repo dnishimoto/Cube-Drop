@@ -164,6 +164,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     var cubeDistanceFromGround: Float = 5.0
     @State var topY : Float = 0
+    private var entityIndex: [ObjectIdentifier: EntityNode] = [:]
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -202,7 +203,24 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         scene.rootNode.addChildNode(effectsRoot)
 
     }
+    @discardableResult
+      func addEntity(_ node: EntityNode, to parent: SCNNode? = nil) -> EntityNode {
+          registerEntity(node)
+          let targetParent = parent ?? enemyRoot
+          targetParent.addChildNode(node)
+          return node
+      }
 
+      func removeEntity(_ node: SCNNode) {
+          unregisterEntity(node)
+          if let kind = kind(of: node) {
+              cleanupTrackingState(for: node, kind: kind)
+          }
+          node.removeAllActions()
+          node.physicsBody = nil
+          node.constraints = nil
+          node.removeFromParentNode()
+      }
     func setupPlayer() {
         let size = cubeSize * 1.4
         let icon = makeLabelBillboard(text: "🧍", color: .cyan, worldSize: size)
@@ -235,7 +253,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         player.physicsBody = body
 
         playerNode = player
-        scene.rootNode.addChildNode(player)
+        //scene.rootNode.addChildNode(player)
+        addEntity(player, to: scene.rootNode)
     }
 
     func setupPlayerPlatform() {
@@ -248,15 +267,18 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         box.firstMaterial?.emission.contents = UIColor.cyan.withAlphaComponent(0.6)
         box.firstMaterial?.lightingModel = .blinn
 
-        let node = SCNNode(geometry: box)
+        let node = EntityNode(kind:.platform,geometry: box)
+        
+
         node.name = "playerPlatform"
         let x = laserWorldPosition().x
         node.position = SCNVector3(x, groundY + Float(height * 0.5), wallZ)
         node.renderingOrder = 10
         // purely visual; no physics body
 
-        scene.rootNode.addChildNode(node)
+        //scene.rootNode.addChildNode(node)
         platformNode = node
+        addEntity(node, to: scene.rootNode)
     }
 
     func setupCamera() {
@@ -359,8 +381,11 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         // Keep this
         centipedeLastPosition[id] = worldPosition
+        
+        
+        addEntity(node, to: enemyRoot)
 
-        enemyRoot.addChildNode(node)
+        //enemyRoot.addChildNode(node)
 
         return node
     }
@@ -431,7 +456,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             centipedeLastPosition[id] = position
         }
 
-        enemyRoot.addChildNode(node)
+        addEntity(node,to:enemyRoot)
+        //enemyRoot.addChildNode(node)
 
         return node
     }
@@ -459,7 +485,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         ladybugDirection[ObjectIdentifier(node)] = Bool.random() ? 1.0 : -1.0
 
-        enemyRoot.addChildNode(node)
+        addEntity(node, to:enemyRoot)
+        //enemyRoot.addChildNode(node)
     }
 
     func spawnLadybug(at worldPosition: SCNVector3) {
@@ -485,7 +512,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         ladybugDirection[ObjectIdentifier(node)] = Bool.random() ? 1.0 : -1.0
 
-        enemyRoot.addChildNode(node)
+        addEntity(node, to:enemyRoot)
+        //enemyRoot.addChildNode(node)
     }
 
     //---------------------------------------------------------
@@ -546,7 +574,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         spiderAnchorY[ObjectIdentifier(node)] = worldPosition.y
 
-        enemyRoot.addChildNode(node)
+        addEntity(node, to:enemyRoot)
+        //enemyRoot.addChildNode(node)
     }
 
     func spawnRewardEnemy(at worldPosition: SCNVector3) {
@@ -729,11 +758,6 @@ func setupGestures() {
         tap.require(toFail: pan)
         sceneView.addGestureRecognizer(tap)
 
-        let slashPan = UIPanGestureRecognizer(target: self, action: #selector(handleSlashPan(_:)))
-        slashPan.minimumNumberOfTouches = 2
-        slashPan.cancelsTouchesInView = false
-        sceneView.addGestureRecognizer(slashPan)
-
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         longPress.minimumPressDuration = 0.20
         longPress.allowableMovement = 35
@@ -778,25 +802,7 @@ func setupGestures() {
         moveLaser(toScreenX: location.x)
     }
 
-    @objc func handleSlashPan(_ gesture: UIPanGestureRecognizer) {
-        switch gesture.state {
-        case .began:
-            slashStartScreenPoint = gesture.location(in: sceneView)
-        case .changed:
-            slashEndScreenPoint = gesture.location(in: sceneView)
-        case .ended, .cancelled, .failed:
-            let start = slashStartScreenPoint
-            let end = slashEndScreenPoint ?? gesture.location(in: sceneView)
-            slashStartScreenPoint = nil
-            slashEndScreenPoint = nil
-            if let start, start != end {
-                performSlash(from: start, to: end)
-            }
-        default:
-            break
-        }
-    }
-
+ 
     @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
         switch gesture.state {
         case .began:
@@ -832,35 +838,7 @@ func setupGestures() {
         return hypot(px - sx, py - sy)
     }
 
-    private func performSlash(from start: CGPoint, to end: CGPoint) {
-        guard !gameState.isGameOver else { return }
-        // Visuals at the mid-point using an approximate y-plane
-        let midScreen = CGPoint(x: (start.x + end.x) * 0.5, y: (start.y + end.y) * 0.5)
-        let approxY: Float = groundY + 2.0
-        let midWorld = worldPointFromScreen(midScreen, yPlane: approxY)
-        spawnSlashSprite(at: midWorld, color: .cyan)
-        spawnSlashShockwave(at: midWorld, color: .cyan)
-
-        // Hit test in screen-space: destroy any targetable entity close to the slash path
-        let threshold: CGFloat = 60
-        scene.rootNode.enumerateChildNodes { [weak self] node, _ in
-            guard let self = self else { return }
-            guard let entityNode = self.findEntityParent(node),
-                  let kind = self.kind(of: entityNode),
-                  let profile = self.knowledge.profile(for: kind),
-                  profile.canBeTargetedByLaser else { return }
-
-            let worldPos = entityNode.presentation.worldPosition
-            let screenPos = self.sceneView.projectPoint(worldPos)
-            let p = CGPoint(x: CGFloat(screenPos.x), y: CGFloat(screenPos.y))
-            let d = self.distanceFromPoint(p, toSegment: start, end)
-            if d <= threshold {
-                let contact = self.worldPointFromScreen(p, yPlane: worldPos.y)
-                self.resolveHit(attacker: .playerLaser, target: entityNode, contactPoint: contact)
-            }
-        }
-    }
-
+  
     func moveLaser(toScreenX x: CGFloat) {
         let fraction = max(0, min(1, x / sceneView.bounds.width))
         let newColumn = Int(round(fraction * CGFloat(gridWidth - 1)))
@@ -1077,8 +1055,8 @@ func setupGestures() {
         if let billboard = node.constraints?.first as? SCNBillboardConstraint {
             billboard.freeAxes = .all
         }
-
-        enemyRoot.addChildNode(node)
+        addEntity(node, to:enemyRoot)
+        //enemyRoot.addChildNode(node)
     }
     func destroy(
         node: SCNNode,
@@ -1092,14 +1070,7 @@ func setupGestures() {
             (node.geometry?.firstMaterial?.emission.contents as? UIColor)
             ?? .cyan
 
-        if kind != .cube {
-           /* spawnExplosion(
-                at: point,
-                color: color
-            )
-            */
-        }
-
+    
         playSound(
             kind == .missile
                 ? GameSound.missileHit.rawValue
@@ -1292,13 +1263,18 @@ func setupGestures() {
 
         node.physicsBody = body
 
-        enemyRoot.addChildNode(node)
+        addEntity(node, to:enemyRoot)
+        //enemyRoot.addChildNode(node)
     }
 
     func spawnBonusPointObject(at worldPosition: SCNVector3) {
-        let root = SCNNode()
-           let kind = EntityNode(kind: .bonusPointObject, geometry: nil)
+        let geo = SCNSphere(radius: 0.22)
+        geo.firstMaterial?.diffuse.contents = UIColor.systemOrange
+        geo.firstMaterial?.emission.contents =
+            UIColor.systemOrange.withAlphaComponent(0.45)
         
+        let root = EntityNode(kind: .bonusPointObject, geometry: geo)
+      
         let dollarColor = UIColor.yellow
 
         let bar = SCNBox(
@@ -1345,7 +1321,8 @@ func setupGestures() {
         body.angularDamping = 0.5
 
         root.physicsBody = body
-        enemyRoot.addChildNode(root)
+        //enemyRoot.addChildNode(root)
+        addEntity(root, to:enemyRoot)
     }
 
     func spawnExplosion(at position: SCNVector3, color: UIColor) {
@@ -1425,7 +1402,8 @@ func setupGestures() {
         bolt.physicsBody = body
 
 
-        scene.rootNode.addChildNode(bolt)
+        //scene.rootNode.addChildNode(bolt)
+        addEntity(bolt, to:scene.rootNode)
 
         activeLasers.append(bolt)
 
@@ -1717,90 +1695,12 @@ func setupGestures() {
         body.collisionBitMask = PhysicsCategory.none
         missile.physicsBody = body
 
-        enemyRoot.addChildNode(missile)
+        //enemyRoot.addChildNode(missile)
+        addEntity(missile, to:enemyRoot)
         missile.runAction(.sequence([
             .moveBy(x: 0, y: -12, z: 0, duration: 2.0 / gameState.difficulty),
         ]))
         removeQueue.append(missile)
-    }
-
-    func spawnSlashShockwave(at position: SCNVector3, color: UIColor) {
-        let ring = SCNTorus(ringRadius: cubeSize * 0.2, pipeRadius: cubeSize * 0.04)
-        ring.firstMaterial?.diffuse.contents = UIColor.clear
-        ring.firstMaterial?.emission.contents = color
-        ring.firstMaterial?.lightingModel = .constant
-
-        let node = SCNNode(geometry: ring)
-        node.position = position
-        node.eulerAngles.x = Float.pi / 2
-        node.opacity = 0.85
-
-        let billboard = SCNBillboardConstraint()
-        billboard.freeAxes = [.X, .Y]
-        node.constraints = [billboard]
-
-        scene.rootNode.addChildNode(node)
-
-        let expand = SCNAction.scale(to: 3.5, duration: 0.25)
-        let fade = SCNAction.fadeOut(duration: 0.25)
-        node.runAction(.sequence([.group([expand, fade])]))
-        removeQueue.append(node)
-    }
-
-    func spawnSlashSprite(at position: SCNVector3, color: UIColor) {
-        let plane = SCNPlane(width: cubeSize * 1.4, height: cubeSize * 0.45)
-        let image = drawSlashImage(size: CGSize(width: 256, height: 128), color: color)
-
-        let material = SCNMaterial()
-        material.diffuse.contents = UIColor.clear
-        material.emission.contents = image
-        material.blendMode = .add
-        material.lightingModel = .constant
-        material.isDoubleSided = true
-        plane.materials = [material]
-
-        let node = SCNNode(geometry: plane)
-        node.position = position
-        node.eulerAngles.z = Float.random(in: -0.7...0.7)
-
-        let billboard = SCNBillboardConstraint()
-        billboard.freeAxes = .all
-        node.constraints = [billboard]
-
-        node.opacity = 0
-        scene.rootNode.addChildNode(node)
-
-        let appear = SCNAction.group([
-            .fadeOpacity(to: 1.0, duration: 0.04),
-            .scale(to: 1.2, duration: 0.04)
-        ])
-        let settle = SCNAction.scale(to: 1.0, duration: 0.07)
-        let fade = SCNAction.fadeOut(duration: 0.2)
-
-        node.runAction(.sequence([appear, settle, .wait(duration: 0.1), fade ]))
-        removeQueue.append(node)
-    }
-
-    private func drawSlashImage(size: CGSize, color: UIColor) -> UIImage {
-        let renderer = UIGraphicsImageRenderer(size: size)
-        return renderer.image { ctx in
-            let c = ctx.cgContext
-            let path = UIBezierPath()
-            let inset = size.height * 0.2
-            path.move(to: CGPoint(x: inset, y: size.height - inset))
-            path.addLine(to: CGPoint(x: size.width - inset, y: inset))
-
-            c.setLineCap(.round)
-            c.setLineWidth(size.height * 0.38)
-            c.setStrokeColor(color.withAlphaComponent(0.9).cgColor)
-            c.addPath(path.cgPath)
-            c.strokePath()
-
-            c.setLineWidth(size.height * 0.22)
-            c.setStrokeColor(UIColor.white.withAlphaComponent(0.95).cgColor)
-            c.addPath(path.cgPath)
-            c.strokePath()
-        }
     }
 
     private func drawLabelImage(text: String, size: CGSize, color: UIColor? = nil) -> UIImage {
@@ -2259,55 +2159,47 @@ func setupGestures() {
         let id = ObjectIdentifier(fly)
         flyWobble[id] = Float.random(in: 8...15)
         flyChaos[id] = Float.random(in: 1.5...3.0)
-
-        enemyRoot.addChildNode(fly)
+        addEntity(fly,to: enemyRoot)
+        //enemyRoot.addChildNode(fly)
     }
-    func updateFly(_ fly: EntityNode, dt: TimeInterval, removalList: inout [SCNNode]) {
+    func updateFly(_ fly: SCNNode, dt: TimeInterval) {
         let id = ObjectIdentifier(fly)
-        let time = Float(lastUpdateTime)
-
-        if flyWobble[id] == nil {
-            flyWobble[id] = Float.random(in: 4.5...8.5)
-        }
-        if flyChaos[id] == nil {
-            flyChaos[id] = Float.random(in: 2.0...4.5)
-        }
-
         guard let player = playerNode else { return }
+        guard flyWobble[id] != nil, flyChaos[id] != nil else { return }
 
-        let wobble = flyWobble[id] ?? 6.0
-        let chaos = flyChaos[id] ?? 3.0
-
-        let pos = fly.presentation.worldPosition
+        var pos = fly.presentation.worldPosition
         let playerPos = player.presentation.worldPosition
+        let delta = Float(dt)
 
-        var newPos = pos
-        let chaseStrength: Float = 1.8 * Float(dt)
-        let zig = sin(time * wobble) * 1.2 + sin(time * chaos) * 0.7
+        let toPlayerX = playerPos.x - pos.x
+        let toPlayerY = playerPos.y - pos.y
 
-        newPos.x += max(-1.0, min(1.0, playerPos.x - pos.x)) * chaseStrength * 1.4
-        newPos.x += zig * Float(dt) * 2.8
-        newPos.y -= 1.0 * Float(dt)
+        let speed: Float = 4.2
+        let seekX: Float = max(-1.0, min(1.0, toPlayerX * 0.12))
+        let seekY: Float = max(-1.0, min(1.0, toPlayerY * 0.10))
 
-        let bound: Float = 8.5
-        newPos.x = max(-bound, min(bound, newPos.x))
-        fly.position = newPos
+        let t = Float(CACurrentMediaTime())
+        let wobble = sin(t * (flyWobble[id] ?? 14.0)) * 1.6
+        let chaos = cos(t * (flyChaos[id] ?? 4.5)) * 0.9
 
-        let hitDistance = distanceBetween(newPos, playerPos)
-        if hitDistance < 0.5 {
-            gameState.score = max(0, gameState.score - 25)
-            spawnExplosion(at: newPos, color: .systemRed)
-            triggerGameOverFromEnemyContact(node: fly, at: newPos)
-            flyWobble.removeValue(forKey: id)
-            flyChaos.removeValue(forKey: id)
-            removalList.append(fly)
-            return
+        pos.x += (seekX * 2.0 + wobble + chaos) * delta * speed
+        pos.y += (-0.45 + seekY * 1.4 + sin(t * 18.0) * 0.25) * delta * speed
+
+        if Bool.random() && Int.random(in: 0..<20) == 0 {
+            flyWobble[id] = Float.random(in: 12.0...22.0)
+            flyChaos[id] = Float.random(in: 3.5...7.5)
         }
 
-        if newPos.y < groundY - 2 {
+        let bound: Float = 7.5
+        pos.x = max(-bound, min(bound, pos.x))
+        pos.y = min(groundY + 7.0, max(groundY + 0.5, pos.y))
+
+        fly.position = pos
+
+        if pos.y < groundY - 2 {
             flyWobble.removeValue(forKey: id)
             flyChaos.removeValue(forKey: id)
-            removalList.append(fly)
+            fly.removeFromParentNode()
         }
     }
     func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
@@ -2338,7 +2230,7 @@ func setupGestures() {
             case .ladybug:
                 updateLadybugMovement(entity, dt: dt)
             case .fly:
-                updateFly(entity, dt: dt, removalList: &fliesToRemove)
+                updateFly(entity, dt: dt)
             default:
                 break
             }
@@ -2482,15 +2374,20 @@ func setupGestures() {
         guard node.parent != nil else { return }
         pendingNodeRemovals.append(node)
     }
-    func activeEntitySnapshot(kind: KnowledgeTree.EntityKind? = nil) -> [SCNNode] {
-        var nodes: [SCNNode] = []
-        scene.rootNode.enumerateChildNodes { node, _ in
-            guard let entity = node as? EntityNode else { return }
-            if let kind, entity.kind != kind { return }
-            nodes.append(node)
+
+    func activeEntitySnapshot(kind filterKind: KnowledgeTree.EntityKind? = nil) -> [EntityNode] {
+        entityIndex.values.compactMap { entity in
+            guard entity.parent != nil else {
+                unregisterEntity(entity)   // auto-clean dead references
+                return nil
+            }
+            if let filterKind, entity.kind != filterKind {
+                return nil
+            }
+            return entity
         }
-        return nodes
     }
+
     func forceRemove(_ node: SCNNode) {
         guard node.parent != nil else { return }
         node.removeAllActions()
@@ -2501,20 +2398,33 @@ func setupGestures() {
     
     func cleanRemoveQueue() {
         var seen = Set<ObjectIdentifier>()
+        
         for node in removeQueue {
             let id = ObjectIdentifier(node)
-            if seen.insert(id).inserted {
-                if node.parent != nil {
-                    node.removeAllActions()
-                    node.physicsBody = nil
-                    node.constraints = nil
-                    node.removeFromParentNode()
+            
+            // Avoid processing the same node multiple times
+            guard seen.insert(id).inserted else { continue }
+            
+            // Safe cleanup
+            if node.parent != nil {
+                // Unregister first (important!)
+                unregisterEntity(node)
+                
+                // Clean up AI / tracking state
+                if let kind = kind(of: node) {
+                    cleanupTrackingState(for: node, kind: kind)
                 }
+                
+                // Now safely remove from SceneKit
+                node.removeAllActions()
+                node.physicsBody = nil
+                node.constraints = nil
+                node.removeFromParentNode()
             }
         }
+        
         removeQueue.removeAll()
     }
-
     
     //---------------------------------------------------------
     // CENTIPEDE AI
@@ -2635,7 +2545,17 @@ func setupGestures() {
         thread.scale = SCNVector3(1, length, 1)
         thread.position = SCNVector3(current.x, anchorY - length / 2, current.z)
     }
-    
+
+
+    func registerEntity(_ node: EntityNode) {
+        entityIndex[ObjectIdentifier(node)] = node
+    }
+
+    func unregisterEntity(_ node: SCNNode) {
+        entityIndex.removeValue(forKey: ObjectIdentifier(node))
+    }
+
+   
     func removeSpiderThread(for spider: SCNNode) {
         let id = ObjectIdentifier(spider)
         let thread = spiderThreads[id]
@@ -2710,7 +2630,8 @@ func setupGestures() {
         billboard.freeAxes = .all
         grasshopper.constraints = [billboard]
 
-        enemyRoot.addChildNode(grasshopper)
+        //enemyRoot.addChildNode(grasshopper)
+        addEntity(grasshopper,to:enemyRoot)
     }
 
     //---------------------------------------------------------
@@ -2736,7 +2657,8 @@ func setupGestures() {
         body.collisionBitMask = PhysicsCategory.none
         ufo.physicsBody = body
 
-        enemyRoot.addChildNode(ufo)
+        //enemyRoot.addChildNode(ufo)
+        addEntity(ufo,to:enemyRoot)
 
         let travelDuration = Double(8.0 / gameState.difficulty)
 
