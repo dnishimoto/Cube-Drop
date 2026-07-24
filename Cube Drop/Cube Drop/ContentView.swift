@@ -61,7 +61,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-        
+
     }
 
     struct CubeSlot {
@@ -75,7 +75,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     var sceneView: SCNView!
     var scene: SCNScene!
     var cameraNode = SCNNode()
-    
+
     func topOfGridY() -> Float {
     let pitch = Float(cubeSize + cubeSpacing)
     return groundY + cubeDistanceFromGround + Float(gridHeight - 1) * pitch
@@ -94,7 +94,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     var lastUpdateTime: TimeInterval = 0
     var lastFireTime: TimeInterval = 0
-    
+
     var lastFlySpawnTime: TimeInterval = 0
     var flySpawnInterval: TimeInterval = 6.0
 
@@ -108,7 +108,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     var cubeSpacing: CGFloat = 0.06
     var groundY: Float = -6.0
     var wallZ: Float = 0.0
-    
+
     var fliesToRemove: [SCNNode] = []
 
     var gridWidth: Int = 16
@@ -123,13 +123,13 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     var activeLasers: [SCNNode] = []
 
     var playerNode: SCNNode?
-    
+
     // Visual platform that shows the player's firing base
     var platformNode: SCNNode?
 
     // Grasshopper AI state
     var grasshopperJumping = Set<ObjectIdentifier>()
-    var grasshoppersToRemove: [SCNNode] = []
+    var removeQueue: [SCNNode] = []
 
     // Centipede AI state
     var centipedeDirection: [ObjectIdentifier: Float] = [:]
@@ -141,24 +141,20 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     // Ladybug AI state
     var ladybugDirection: [ObjectIdentifier: Float] = [:]
-    var removeLadybugList: [SCNNode] = []
+
 
     private var slashStartScreenPoint: CGPoint?
     private var slashEndScreenPoint: CGPoint?
-    
+
     var flyWobble: [ObjectIdentifier: Float] = [:]
     var flyChaos: [ObjectIdentifier: Float] = [:]
-    
+
     var cameraTarget = SCNVector3(0, 0, 0)
     var cameraDistance: Float = 16
     var cameraHeight: Float = -5
     var cameraYaw: Float = 0
     var cameraPitch: Float = -0.12
-    var removeLaserList: [SCNNode] = []
-    var spidersToRemove: [SCNNode] = []
-    var spiderThreadsToRemove: [SCNNode] = []
-    var spiderAnchorsToRemove: [ObjectIdentifier] = []
-    
+
     var cubeDistanceFromGround: Float = 5.0
     @State var topY : Float = 0
 
@@ -197,9 +193,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         scene.rootNode.addChildNode(gridRoot)
         scene.rootNode.addChildNode(enemyRoot)
         scene.rootNode.addChildNode(effectsRoot)
- 
+
     }
-   
+
     func setupPlayer() {
         let size = cubeSize * 1.4
         let icon = makeLabelBillboard(text: "🧍", color: .cyan, worldSize: size)
@@ -234,7 +230,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         playerNode = player
         scene.rootNode.addChildNode(player)
     }
-    
+
     func setupPlayerPlatform() {
         // A small base at ground level that tracks the laser's X position
         let width = CGFloat(cubeSize + cubeSpacing) * 0.9
@@ -361,7 +357,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         return node
     }
-    
+
     func spawnCentipedeSegment(
         at position: SCNVector3,
         follow target: SCNNode?
@@ -434,54 +430,54 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     }
     func spawnLadybug() {
         let size = cubeSize * 1.35
-        
+
         // Use ladybug emoji with natural colors (no tint)
         let plane = makeLabelBillboard(text: "🐞", color: nil, worldSize: size)
-        
+
         let node = EntityNode(kind: .ladybug, geometry: plane)
         node.name = "Ladybug"
         node.position = SCNVector3(5, groundY + 4.5, 0)
         node.renderingOrder = 110
         node.scale = SCNVector3(1.1, 1.1, 1.1)   // Make it a bit more visible
-        
+
         let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size * 1.1))
         body.categoryBitMask = PhysicsCategory.ladybug
         body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.player
         body.collisionBitMask = PhysicsCategory.none
         node.physicsBody = body
-        
+
         let billboard = SCNBillboardConstraint()
         billboard.freeAxes = .all
         node.constraints = [billboard]
-        
+
         ladybugDirection[ObjectIdentifier(node)] = Bool.random() ? 1.0 : -1.0
-        
+
         enemyRoot.addChildNode(node)
     }
 
     func spawnLadybug(at worldPosition: SCNVector3) {
         let size = cubeSize * 1.25
-        
+
         // Ladybug emoji icon
         let plane = makeLabelBillboard(text: "🐞", color: .white, worldSize: size)
-        
+
         let node = EntityNode(kind: .ladybug, geometry: plane)
         node.name = "Ladybug"
         node.position = worldPosition
         node.renderingOrder = 110
-        
+
         let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
         body.categoryBitMask = PhysicsCategory.ladybug
         body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.player
         body.collisionBitMask = PhysicsCategory.none
         node.physicsBody = body
-        
+
         let billboard = SCNBillboardConstraint()
         billboard.freeAxes = .all
         node.constraints = [billboard]
-        
+
         ladybugDirection[ObjectIdentifier(node)] = Bool.random() ? 1.0 : -1.0
-        
+
         enemyRoot.addChildNode(node)
     }
 
@@ -522,21 +518,21 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     func spawnSpider(at worldPosition: SCNVector3) {
         let size = cubeSize * 1.3
-        
+
         // Use spider emoji instead of "S"
         let plane = makeLabelBillboard(text: "🕷️", color: .white, worldSize: size)
-        
+
         let node = EntityNode(kind: .spider, geometry: plane)
         node.name = "Spider"
         node.position = worldPosition
         node.renderingOrder = 120
-        
+
         let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size))
         body.categoryBitMask = PhysicsCategory.spider
         body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.player
         body.collisionBitMask = PhysicsCategory.none
         node.physicsBody = body
-        
+
         let billboard = SCNBillboardConstraint()
         billboard.freeAxes = .all
         node.constraints = [billboard]
@@ -545,7 +541,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         enemyRoot.addChildNode(node)
     }
- 
+
     func spawnRewardEnemy(at worldPosition: SCNVector3) {
         let safeY = min(worldPosition.y, topOfGridY() - 0.5)
         let safeX = max(-6.0, min(6.0, worldPosition.x))
@@ -561,7 +557,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             let headNode = spawnCentipedeHead(at: spawnPoint)
             let bodyNode1 = spawnCentipedeSegment(at: spawnPoint, follow: headNode)
             let bodyNode2 = spawnCentipedeSegment(at: spawnPoint, follow: bodyNode1)
-            let bodyNode3 = spawnCentipedeSegment(at: spawnPoint, follow: bodyNode2)
+
         }
     }
 
@@ -659,7 +655,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     func loadCube(into slot: inout CubeSlot,
                   animated: Bool,
                   dropFromTop: Bool = false) {
-        
+
         guard slot.node == nil else { return }
 
         let cubeGeo = SCNBox(
@@ -685,7 +681,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         if animated {
             let dropStartY: Float
-            
+
             if dropFromTop {
                 // Start from the TOP of the screen
                 dropStartY = groundY + 18.0 + Float(slot.row) * 1.2   // higher + slight stagger per row
@@ -693,17 +689,17 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
                 // Normal individual cube drop
                 dropStartY = Float(gridHeight - slot.row) * Float(cubeSize + cubeSpacing) + 3.0
             }
-            
+
             node.position = SCNVector3(0, dropStartY, 0)
             slot.container.addChildNode(node)
-            
+
             let fallDuration = dropFromTop ? 0.65 : 0.45
-            
+
             let fall = SCNAction.move(to: SCNVector3(0, 0, 0), duration: fallDuration)
             fall.timingMode = .easeIn
-            
+
             node.runAction(fall)
-            
+
         } else {
             node.position = SCNVector3Zero
             slot.container.addChildNode(node)
@@ -746,7 +742,7 @@ func setupGestures() {
     private func longPressRecognizer() -> UILongPressGestureRecognizer? {
         return sceneView.gestureRecognizers?.compactMap { $0 as? UILongPressGestureRecognizer }.first
     }
-    
+
     @objc func handleTap(_ gesture: UITapGestureRecognizer) {
         guard !gameState.isGameOver else { return }
         let location = gesture.location(in: sceneView)
@@ -1042,26 +1038,6 @@ func setupGestures() {
     // objects and awards extra score for each one caught in the blast.
     //--------------------------------------------------
 
-    func burstNearbyPointObjects(at position: SCNVector3, radius: Float) {
-        var destroyedCount = 0
-
-        enemyRoot.enumerateChildNodes { node, _ in
-            guard let k = self.kind(of: node), k == .pointObject else { return }
-
-            let d = self.distanceBetween(node.presentation.worldPosition, position)
-            if d <= radius {
-                node.removeFromParentNode()
-                destroyedCount += 1
-            }
-        }
-
-        if destroyedCount > 0 {
-            gameState.score += destroyedCount * 5
-            spawnExplosion(at: position, color: .yellow)
-            playSound(GameSound.bonus.rawValue)
-        }
-    }
-
     func spawnMushroomFunc(at worldPosition: SCNVector3) {
 
         let size = cubeSize * 1.1
@@ -1127,7 +1103,7 @@ func setupGestures() {
         // REMOVE OBJECT
         //--------------------------------------------------
 
-        node.removeFromParentNode()
+        removeQueue.append(node)
 
         //--------------------------------------------------
         // CUBE DESTROYED
@@ -1313,18 +1289,43 @@ func setupGestures() {
     }
 
     func spawnBonusPointObject(at worldPosition: SCNVector3) {
-        let size = cubeSize * 1.2
-        let plane = makeLabelBillboard(text: "$$$", color: .yellow, worldSize: size)
-        let node = EntityNode(kind: .bonusPointObject, geometry: plane)
-        node.name = "$$$"
-        node.position = worldPosition
-        node.renderingOrder = 100
+        let root = SCNNode()
 
-        let body = SCNPhysicsBody(
-            type: .dynamic,
-            shape: labelPhysicsShape(size: size)
+        let dollarColor = UIColor.yellow
+
+        let bar = SCNBox(
+            width: cubeSize * 0.16,
+            height: cubeSize * 1.05,
+            length: cubeSize * 0.16,
+            chamferRadius: cubeSize * 0.04
         )
+        bar.firstMaterial?.diffuse.contents = dollarColor
+        bar.firstMaterial?.emission.contents = dollarColor.withAlphaComponent(0.35)
 
+        let barNode = SCNNode(geometry: bar)
+        barNode.position = SCNVector3(0, 0, 0)
+        root.addChildNode(barNode)
+
+        let topCircle = SCNSphere(radius: cubeSize * 0.22)
+        topCircle.firstMaterial?.diffuse.contents = dollarColor
+        topCircle.firstMaterial?.emission.contents = dollarColor.withAlphaComponent(0.35)
+
+        let topNode = SCNNode(geometry: topCircle)
+        topNode.position = SCNVector3(0, cubeSize * 0.28, 0)
+        root.addChildNode(topNode)
+
+        let bottomCircle = SCNSphere(radius: cubeSize * 0.22)
+        bottomCircle.firstMaterial?.diffuse.contents = dollarColor
+        bottomCircle.firstMaterial?.emission.contents = dollarColor.withAlphaComponent(0.35)
+
+        let bottomNode = SCNNode(geometry: bottomCircle)
+        bottomNode.position = SCNVector3(0, -cubeSize * 0.28, 0)
+        root.addChildNode(bottomNode)
+
+        root.position = worldPosition
+        root.renderingOrder = 100
+
+        let body = SCNPhysicsBody(type: .dynamic, shape: nil)
         body.categoryBitMask = PhysicsCategory.pointObject
         body.contactTestBitMask = PhysicsCategory.ground | PhysicsCategory.laser
         body.collisionBitMask = PhysicsCategory.none
@@ -1333,13 +1334,10 @@ func setupGestures() {
         body.damping = 0.2
         body.angularDamping = 0.5
 
-        node.physicsBody = body
-        let billboard = SCNBillboardConstraint()
-        billboard.freeAxes = .all
-        node.constraints = [billboard]
-
-        enemyRoot.addChildNode(node)
+        root.physicsBody = body
+        enemyRoot.addChildNode(root)
     }
+
     func spawnExplosion(at position: SCNVector3, color: UIColor) {
         let ps = SCNParticleSystem()
         ps.birthRate = 220
@@ -1357,9 +1355,9 @@ func setupGestures() {
         node.position = position
         node.addParticleSystem(ps)
         effectsRoot.addChildNode(node)
-        node.runAction(.sequence([.wait(duration: 0.8), .removeFromParentNode()]))
+        node.runAction(.sequence([.wait(duration: 0.8)]))
+        removeQueue.append(node)
     }
-
     func currentAutoFireInterval() -> TimeInterval {
         let scoreFactor = min(Double(gameState.score) / 120.0, 1.0)
         return max(0.08, 1.6 - (1.2 * scoreFactor))
@@ -1456,7 +1454,7 @@ func setupGestures() {
 
             // Otherwise just remove with explosion
             self.spawnExplosion(at: node.presentation.worldPosition, color: .brown)
-            node.removeFromParentNode()
+            removeQueue.append(node)
         }
 
         grasshopper.runAction(.sequence([fall, finish]))
@@ -1473,16 +1471,9 @@ func setupGestures() {
             near.z + (far.z - near.z) * t
         )
     }
-    func removeGrasshoppers() {
-        for grasshopper in self.grasshoppersToRemove {
-            guard let kind = kind(of: grasshopper) else { continue }
-            spawnExplosion(at: grasshopper.presentation.worldPosition, color: .brown)
-            grasshopper.removeFromParentNode()
-        }
-    }
+
     func updateGrasshopper(_ grasshopper: SCNNode) {
         let id = ObjectIdentifier(grasshopper)
-
         guard grasshopper.parent != nil else { return }
         guard !grasshopperJumping.contains(id) else { return }
         guard let player = playerNode else { return }
@@ -1494,12 +1485,10 @@ func setupGestures() {
         let directLeapDistance: Float = 1.8
 
         if playerDistance < directLeapDistance {
-            arcJump(grasshopper: grasshopper, target: player.presentation.worldPosition) { [weak self, weak grasshopper] in
-                guard let self = self, let grasshopper = grasshopper else { return }
+            arcJump(grasshopper:grasshopper, target: player.presentation.worldPosition) { [weak self, weak grasshopper] in
+                guard let self, let grasshopper, grasshopper.parent != nil else { return }
                 self.grasshopperJumping.remove(id)
-                if grasshopper.parent != nil {
-                    self.checkGrasshopperLanding(grasshopper)
-                }
+                self.checkGrasshopperLanding(grasshopper)
             }
             return
         }
@@ -1507,102 +1496,60 @@ func setupGestures() {
         if let targetCube = nextJumpTarget(from: grasshopper, toward: player) {
             let cubePos = targetCube.presentation.worldPosition
             let landing = SCNVector3(cubePos.x, cubePos.y + Float(cubeSize) * 0.6, cubePos.z)
-
-            arcJump(grasshopper: grasshopper, target: landing) { [weak self] in
+            arcJump(grasshopper:grasshopper, target: landing) { [weak self] in
                 self?.grasshopperJumping.remove(id)
             }
-            return
+        } else {
+            fallToGround(grasshopper)
+            grasshopperJumping.remove(id)
         }
-
-        grasshopperJumping.remove(id)
-        grasshoppersToRemove.append(grasshopper)
-    }
-    func removeAllSpiders() {
-        scene.rootNode.enumerateChildNodes { [weak self] node, _ in
-            guard let self = self else { return }
-            guard let kind = self.kind(of: node), kind == .spider else { return }
-
-            self.queueSpiderRemoval(node)
-        }
-
-        for id in spiderAnchorsToRemove {
-            spiderThreads.removeValue(forKey: id)
-            spiderAnchorY.removeValue(forKey: id)
-        }
-
-        spidersToRemove.removeAll()
-        spiderThreadsToRemove.removeAll()
-        spiderAnchorsToRemove.removeAll()
     }
 
-    func checkGrasshopperLanding(
-        _ grasshopper: SCNNode
+    func arcJump(
+        grasshopper: SCNNode,
+        target: SCNVector3,
+        completion: (() -> Void)? = nil
     ) {
+        let start = grasshopper.presentation.worldPosition
+        let height: Float = 1.8
 
-        guard let player = playerNode else {
-            return
+        let mid = SCNVector3(
+            (start.x + target.x) / 2,
+            max(start.y, target.y) + height,
+            (start.z + target.z) / 2
+        )
+
+        let moveUp = SCNAction.move(to: mid, duration: 0.25)
+        moveUp.timingMode = .easeOut
+
+        let moveDown = SCNAction.move(to: target, duration: 0.25)
+        moveDown.timingMode = .easeIn
+
+        let finish = SCNAction.run { [weak grasshopper] _ in
+            guard grasshopper?.parent != nil else { return }
+            completion?()
         }
 
+        grasshopper.runAction(.sequence([moveUp, moveDown, finish]))
+    }
+
+
+
+
+    func checkGrasshopperLanding(_ grasshopper: SCNNode) {
+        guard grasshopper.parent != nil else { return }
+        guard let player = playerNode else { return }
 
         let distance = distanceBetween(
             grasshopper.presentation.worldPosition,
             player.presentation.worldPosition
         )
 
-
         if distance < 0.45 {
             triggerGameOverFromEnemyContact(node: grasshopper, at: player.position)
         }
     }
-    func arcJump(
-        grasshopper: SCNNode,
-        target: SCNVector3,
-        completion: (() -> Void)? = nil
-    ) {
-
-        let start =
-            grasshopper.presentation.worldPosition
-
-
-        let height: Float = 1.8
-
-
-        let mid = SCNVector3(
-            (start.x + target.x) / 2,
-            max(start.y,target.y) + height,
-            (start.z + target.z) / 2
-        )
-
-
-        let moveUp = SCNAction.move(
-            to: mid,
-            duration: 0.25
-        )
-
-        moveUp.timingMode = .easeOut
-
-
-        let moveDown = SCNAction.move(
-            to: target,
-            duration: 0.25
-        )
-
-        moveDown.timingMode = .easeIn
-
-
-        let finish = SCNAction.run { _ in
-            completion?()
-        }
-
-
-        grasshopper.runAction(
-            .sequence([
-                moveUp,
-                moveDown,
-                finish
-            ])
-        )
-    }
+   
 
     func updateDifficulty() {
         let s = Double(gameState.score)
@@ -1625,79 +1572,18 @@ func setupGestures() {
         for row in 0..<slots.count {
             for col in 0..<slots[row].count {
                 guard let node = slots[row][col].node else { continue }
-                
+
                 let startY = node.position.y + 14.0 + Float(row) * 1.2
                 node.position.y = startY
-                
+
                 let fall = SCNAction.move(to: SCNVector3(0, 0, 0), duration: 0.55)
                 fall.timingMode = .easeOut
                 node.runAction(fall)
             }
         }
     }
-    func removeAllEntities() {
-        scene.rootNode.enumerateChildNodes { [weak self] node, _ in
-            guard let self = self else { return }
-            guard let kind = self.kind(of: node) else { return }
 
-            switch kind {
-            case .spider:
-                self.queueSpiderRemoval(node)
-
-            case .ladybug:
-                self.removeLadybugList.append(node)
-
-            case .grasshopper:
-                self.grasshoppersToRemove.append(node)
-
-            case .fly:
-                self.fliesToRemove.append(node)
-
-            case .missile:
-                self.removeLaserList.append(node)
-
-            case .centipedeHead, .centipedeSegment:
-                node.removeFromParentNode()
-
-            case .playerLaser, .ufo, .pointObject, .bonusPointObject, .mushroom, .cube:
-                node.removeFromParentNode()
-
-            case .player:
-                break
-            }
-        }
-
-        removeAllSpiderThreadsAndAnchors()
-
-        removeLadybugs()
-        removeGrasshoppers()
-        removeSpiders()
-
-        for laser in removeLaserList {
-            laser.removeFromParentNode()
-        }
-        removeLaserList.removeAll()
-
-        for fly in fliesToRemove {
-            fly.removeFromParentNode()
-        }
-        fliesToRemove.removeAll()
-    }
-    func removeAllSpiderThreadsAndAnchors() {
-     
-        scene.rootNode.enumerateChildNodes { [weak self] node, _ in
-            guard let self = self else { return }
-            guard let kind = self.kind(of: node), kind == .spider else { return }
-
-            let id = ObjectIdentifier(node)
-            if let thread = spiderThreads[id] {
-                    spiderThreadsToRemove.append(thread)
-                }
-            self.spidersToRemove.append(node)
-            //self.spiderAnchorsToRemove.append(id)
-
-        }
-    }
+   
     func respawnAllCubes() {
         // Prevent spawns and updates from racing this reset pass
         let previousAutoFire = autoFireEnabled
@@ -1708,39 +1594,36 @@ func setupGestures() {
         gridOffset = 0.0
         gridDirection = 1.0
 
-        // Stop any queued removals and immediately clear spider threads/anchors
-        removeAllSpiderThreadsAndAnchors()
+
 
         // Remove everything under enemy/effects/grid roots
-        enemyRoot.childNodes.forEach { $0.removeFromParentNode() }
-        effectsRoot.childNodes.forEach { $0.removeFromParentNode() }
-        gridRoot.childNodes.forEach { $0.removeFromParentNode() }
+        enemyRoot.childNodes.forEach { removeQueue.append($0)}
+        effectsRoot.childNodes.forEach { removeQueue.append($0) }
+        gridRoot.childNodes.forEach { removeQueue.append($0) }
 
         // Remove any stray lasers
-        activeLasers.forEach { $0.removeFromParentNode() }
+        activeLasers.forEach {removeQueue.append($0) }
         activeLasers.removeAll()
-        removeLaserList.removeAll()
 
         // Remove player and platform if present
-        playerNode?.removeFromParentNode()
-        platformNode?.removeFromParentNode()
-        playerNode = nil
-        platformNode = nil
-
+        if let player = playerNode {
+            removeQueue.append(player)
+        }
+        if let platform = platformNode {
+            removeQueue.append(platform)
+        }
+        removeQueue.append(cameraNode)
+        
+        
         // Clear tracking state
         grasshopperJumping.removeAll()
-        grasshoppersToRemove.removeAll()
         centipedeDirection.removeAll()
         centipedeDropping.removeAll()
         ladybugDirection.removeAll()
-        removeLadybugList.removeAll()
         fliesToRemove.removeAll()
         spiderThreads.removeAll()
         spiderAnchorY.removeAll()
-        spidersToRemove.removeAll()
-        spiderThreadsToRemove.removeAll()
-        spiderAnchorsToRemove.removeAll()
-
+       
         // Reset cube data (containers will be recreated by setupGrid)
         slots.removeAll()
         slotMap.removeAll()
@@ -1751,6 +1634,7 @@ func setupGestures() {
         // Recreate essentials
         setupPlayer()
         setupPlayerPlatform()
+        setupCamera()
 
         if cameraNode.parent == nil {
             scene.rootNode.addChildNode(cameraNode)
@@ -1763,7 +1647,6 @@ func setupGestures() {
         // Resume auto-fire setting
         autoFireEnabled = previousAutoFire
     }
-
 
     func updateLasers(dt: TimeInterval) {
         let speed: Float = 18.0
@@ -1784,13 +1667,7 @@ func setupGestures() {
         }
 
 }
-    func removeLasers() {
-        for laser in removeLaserList {
-            laser.physicsBody = nil
-            laser.removeFromParentNode()
-        }
-        removeLaserList.removeAll()
-    }
+   
     //--------------------------------------------------
     // Cleanup pass for entities whose movement is driven elsewhere
     // (SCNActions for missile/UFO, dedicated AI functions for
@@ -1805,7 +1682,7 @@ func setupGestures() {
             switch kind {
             case .pointObject, .bonusPointObject:
                 if node.position.y < self.groundY - 6 {
-                    node.removeFromParentNode()
+                    removeQueue.append(node)
                 }
 
             default:
@@ -1832,8 +1709,8 @@ func setupGestures() {
         enemyRoot.addChildNode(missile)
         missile.runAction(.sequence([
             .moveBy(x: 0, y: -12, z: 0, duration: 2.0 / gameState.difficulty),
-            .removeFromParentNode()
         ]))
+        removeQueue.append(missile)
     }
 
     func spawnSlashShockwave(at position: SCNVector3, color: UIColor) {
@@ -1855,7 +1732,8 @@ func setupGestures() {
 
         let expand = SCNAction.scale(to: 3.5, duration: 0.25)
         let fade = SCNAction.fadeOut(duration: 0.25)
-        node.runAction(.sequence([.group([expand, fade]), .removeFromParentNode()]))
+        node.runAction(.sequence([.group([expand, fade])]))
+        removeQueue.append(node)
     }
 
     func spawnSlashSprite(at position: SCNVector3, color: UIColor) {
@@ -1888,7 +1766,8 @@ func setupGestures() {
         let settle = SCNAction.scale(to: 1.0, duration: 0.07)
         let fade = SCNAction.fadeOut(duration: 0.2)
 
-        node.runAction(.sequence([appear, settle, .wait(duration: 0.1), fade, .removeFromParentNode()]))
+        node.runAction(.sequence([appear, settle, .wait(duration: 0.1), fade ]))
+        removeQueue.append(node)
     }
 
     private func drawSlashImage(size: CGSize, color: UIColor) -> UIImage {
@@ -1917,33 +1796,33 @@ func setupGestures() {
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { ctx in
             let rect = CGRect(origin: .zero, size: size)
-            
+
             // Clear background
             UIColor.clear.setFill()
             ctx.fill(rect)
-            
+
             let fontSize = size.width * 0.85
-            
+
             // For multi-colored emojis (like 🐞), we use a different approach
             let paragraph = NSMutableParagraphStyle()
             paragraph.alignment = .center
-            
+
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: UIFont.systemFont(ofSize: fontSize, weight: .regular),
                 .foregroundColor: color ?? UIColor.white,
                 .paragraphStyle: paragraph
             ]
-            
+
             let attributedString = NSAttributedString(string: text, attributes: attrs)
             let textSize = attributedString.size()
-            
+
             let drawRect = CGRect(
                 x: (size.width - textSize.width) / 2,
                 y: (size.height - textSize.height) / 2,
                 width: textSize.width,
                 height: textSize.height
             )
-            
+
             attributedString.draw(in: drawRect)
         }
     }
@@ -2005,20 +1884,21 @@ func setupGestures() {
     // Guarded against double-firing.
     //--------------------------------------------------
     func triggerGameOverFromEnemyContact(node: SCNNode, at point: SCNVector3) {
-
         guard !gameState.isGameOver else { return }
 
         if let k = kind(of: node) {
             cleanupTrackingState(for: node, kind: k)
         }
 
-        spawnExplosion(at: point, color: .red)
         playSound(GameSound.gameOver.rawValue)
 
-        node.removeFromParentNode()
+        if node.parent != nil {
+            node.removeAllActions()
+            removeQueue.append(node)
+        }
 
-        DispatchQueue.main.async {
-            self.gameState.isGameOver = true
+        DispatchQueue.main.async { [weak self] in
+            self?.gameState.isGameOver = true
         }
     }
 
@@ -2096,22 +1976,32 @@ func setupGestures() {
 
         if isMissileA && categoryB == PhysicsCategory.cube {
             spawnExplosion(at: contact.contactPoint, color: .systemRed)
-            a.removeFromParentNode()
+            removeQueue.append(a)
             return
         }
 
         if isMissileB && categoryA == PhysicsCategory.cube {
             spawnExplosion(at: contact.contactPoint, color: .systemRed)
-            b.removeFromParentNode()
+            removeQueue.append(b)
             return
         }
 
+        if isMissileA, let kindB = kindB, kindB == .pointObject {
+            removeQueue.append(b)
+            removeQueue.append(a)
+            return
+        }
 
+        if isMissileB, let kindA = kindA, kindA == .pointObject {
+            removeQueue.append(a)
+            removeQueue.append(b)
+            return
+        }
         //--------------------------------------------------
         // MISSILE HITS PLAYER -> GAME OVER
         //--------------------------------------------------
 
-    
+
         if isMissileA && categoryB == PhysicsCategory.player {
 
             if !gameState.isGameOver {
@@ -2120,10 +2010,10 @@ func setupGestures() {
                 playSound(GameSound.gameOver.rawValue)
             }
 
-            a.removeFromParentNode()
+            removeQueue.append(a)
             return
         }
-       
+
 
         if isMissileB && categoryA == PhysicsCategory.player {
 
@@ -2133,16 +2023,16 @@ func setupGestures() {
                 playSound(GameSound.gameOver.rawValue)
             }
 
-            b.removeFromParentNode()
+            removeQueue.append(b)
             return
         }
-        
+
 
         //--------------------------------------------------
         // SPIDER / CENTIPEDE / GRASSHOPPER TOUCHES PLAYER -> GAME OVER
         //--------------------------------------------------
 
-     
+
         let dangerousCategories =
             PhysicsCategory.spider |
             PhysicsCategory.centipedeHead |
@@ -2167,7 +2057,7 @@ func setupGestures() {
         if let kA = kindA, (kA == .pointObject || kA == .bonusPointObject),
            categoryB == PhysicsCategory.ground {
 
-            a.removeFromParentNode()
+            removeQueue.append(a)
             return
         }
 
@@ -2175,7 +2065,7 @@ func setupGestures() {
         if let kB = kindB, (kB == .pointObject || kB == .bonusPointObject),
            categoryA == PhysicsCategory.ground {
 
-            b.removeFromParentNode()
+            removeQueue.append(b)
             return
         }
     }
@@ -2225,13 +2115,13 @@ func setupGestures() {
         }
     }
 
-   
-    
+
+
 
     func updateCentipedeHead(_ node: SCNNode, dt: TimeInterval) {
         let id = ObjectIdentifier(node)
         centipedeLastPosition[id] = node.presentation.worldPosition
-        
+
         if centipedeDropping.contains(id) { return }
         centipedeLastPosition[id] = node.presentation.worldPosition
         let direction = centipedeDirection[id] ?? 1.0
@@ -2252,11 +2142,11 @@ func setupGestures() {
             node.position = next
             node.physicsBody?.resetTransform()
         }
-        
+
 
         // Record the head's position so the first following segment has a
         // valid trail point to chase, same as own-path segments do.
-  
+
     }
     func updateCentipedeSegment(_ node: SCNNode, dt: TimeInterval) {
         let id = ObjectIdentifier(node)
@@ -2361,22 +2251,49 @@ func setupGestures() {
 
         enemyRoot.addChildNode(fly)
     }
-    func updateFly(_ fly: SCNNode, dt: TimeInterval, removalList: inout [SCNNode]) {
+    func updateFly(_ fly: EntityNode, dt: TimeInterval, removalList: inout [SCNNode]) {
         let id = ObjectIdentifier(fly)
-        guard let wobble = flyWobble[id], let chaos = flyChaos[id] else { return }
+        let time = Float(lastUpdateTime)
 
-        var pos = fly.position
-        let time = Float(Date().timeIntervalSince1970)
+        if flyWobble[id] == nil {
+            flyWobble[id] = Float.random(in: 4.5...8.5)
+        }
+        if flyChaos[id] == nil {
+            flyChaos[id] = Float.random(in: 2.0...4.5)
+        }
 
-        pos.x += sin(time * chaos) * 2.8 * Float(dt)
-        pos.y -= 1.2 * Float(dt)
-        pos.y += sin(time * wobble) * 0.9 * Float(dt)
+        guard let player = playerNode else { return }
+
+        let wobble = flyWobble[id] ?? 6.0
+        let chaos = flyChaos[id] ?? 3.0
+
+        let pos = fly.presentation.worldPosition
+        let playerPos = player.presentation.worldPosition
+
+        var newPos = pos
+        let chaseStrength: Float = 1.8 * Float(dt)
+        let zig = sin(time * wobble) * 1.2 + sin(time * chaos) * 0.7
+
+        newPos.x += max(-1.0, min(1.0, playerPos.x - pos.x)) * chaseStrength * 1.4
+        newPos.x += zig * Float(dt) * 2.8
+        newPos.y -= 1.0 * Float(dt)
 
         let bound: Float = 8.5
-        pos.x = max(-bound, min(bound, pos.x))
-        fly.position = pos
+        newPos.x = max(-bound, min(bound, newPos.x))
+        fly.position = newPos
 
-        if pos.y < groundY - 2 {
+        let hitDistance = distanceBetween(newPos, playerPos)
+        if hitDistance < 0.5 {
+            gameState.score = max(0, gameState.score - 25)
+            spawnExplosion(at: newPos, color: .systemRed)
+            triggerGameOverFromEnemyContact(node: fly, at: newPos)
+            flyWobble.removeValue(forKey: id)
+            flyChaos.removeValue(forKey: id)
+            removalList.append(fly)
+            return
+        }
+
+        if newPos.y < groundY - 2 {
             flyWobble.removeValue(forKey: id)
             flyChaos.removeValue(forKey: id)
             removalList.append(fly)
@@ -2389,7 +2306,7 @@ func setupGestures() {
 
         // updateDifficulty()
         // if allCubesGone() { respawnAllCubes() }
-        
+
         updatePlayer()
 
         updateGrid(dt: dt)
@@ -2410,12 +2327,7 @@ func setupGestures() {
                 break
             }
         }
-        removeGrasshoppers()
-        removeLasers()
-        removeLadybugs()
-        removeSpiders()
-        
-        
+
         scene.rootNode.enumerateChildNodes { node, _ in
             guard let entity = node as? EntityNode, entity.kind == .centipedeHead else { return }
             self.updateCentipedeHead(node, dt: dt)
@@ -2435,7 +2347,7 @@ func setupGestures() {
         }
 
         for fly in fliesToRemove {
-            fly.removeFromParentNode()
+            removeQueue.append(fly)
         }
 
         if autoFireEnabled, time - lastAutoFireTime >= autoFireInterval {
@@ -2455,8 +2367,14 @@ func setupGestures() {
             }
         }
 
+        cleanRemoveQueue()
+    }
+    func cleanRemoveQueue() {
+        removeQueue.forEach { $0.removeFromParentNode() }
+        removeQueue.removeAll()
     }
 
+    
     //---------------------------------------------------------
     // CENTIPEDE AI
     // Crawls sideways; when blocked by a cube, mushroom, or the
@@ -2545,30 +2463,14 @@ func setupGestures() {
             }
         }
 
-
         updateSpiderThread(for: node)
 
         if node.position.y < groundY - 1 {
             //removeSpiderThread(for: node)
-            spidersToRemove.append(node)
+            removeQueue.append(node)
         }
     }
-    func removeSpiders() {
-        for spider in spidersToRemove {
-            spider.removeFromParentNode()
-        }
-        for thread in spiderThreadsToRemove {
-            thread.removeFromParentNode()
-        }
-        for id in spiderAnchorsToRemove {
-            spiderThreads.removeValue(forKey: id)
-            spiderAnchorY.removeValue(forKey: id)
-        }
-
-        spidersToRemove.removeAll()
-        spiderThreadsToRemove.removeAll()
-        spiderAnchorsToRemove.removeAll()
-    }
+   
     func updateSpiderThread(for spider: SCNNode) {
         let id = ObjectIdentifier(spider)
         guard let anchorY = spiderAnchorY[id] else { return }
@@ -2592,22 +2494,20 @@ func setupGestures() {
         thread.scale = SCNVector3(1, length, 1)
         thread.position = SCNVector3(current.x, anchorY - length / 2, current.z)
     }
-    func queueSpiderRemoval(_ spider: SCNNode) {
-        let id = ObjectIdentifier(spider)
-        spidersToRemove.append(spider)
-        if let thread = spiderThreads[id] {
-            spiderThreadsToRemove.append(thread)
-        }
-        spiderAnchorsToRemove.append(id)
-    }
+    
     func removeSpiderThread(for spider: SCNNode) {
         let id = ObjectIdentifier(spider)
-
+        
         guard spiderThreads[id] != nil || spiderAnchorY[id] != nil else {
             return
         }
-
-        spiderThreads[id]?.removeFromParentNode()
+        
+        // Unwrap optionals before appending to queue
+        if let thread = spiderThreads[id] {
+            removeQueue.append(thread)
+        }
+    
+        
         spiderThreads.removeValue(forKey: id)
         spiderAnchorY.removeValue(forKey: id)
     }
@@ -2646,37 +2546,32 @@ func setupGestures() {
 
         if pos.y < groundY - 1 {
             ladybugDirection.removeValue(forKey: id)
-            removeLadybugList.append(node)
+            removeQueue.append(node)
         }
     }
-    func removeLadybugs() {
-        for ladybug in removeLadybugList {
-            ladybug.removeFromParentNode()
-        }
-        removeLadybugList.removeAll()
-    }
+   
     func spawnGrasshopper() {
         let size = cubeSize * 1.35
-        
+
         // Grasshopper emoji - natural colors
         let plane = makeLabelBillboard(text: "🦗", color: nil, worldSize: size)
-        
+
         let grasshopper = EntityNode(kind: .grasshopper, geometry: plane)
         grasshopper.name = "Grasshopper"
         grasshopper.position = SCNVector3(0, topOfGridY(), 0)
         grasshopper.renderingOrder = 115
         grasshopper.scale = SCNVector3(1.15, 1.15, 1.15)   // Make it more visible
-        
+
         let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size * 1.1))
         body.categoryBitMask = PhysicsCategory.grasshopper
         body.contactTestBitMask = PhysicsCategory.cube | PhysicsCategory.player | PhysicsCategory.laser
         body.collisionBitMask = PhysicsCategory.none
         grasshopper.physicsBody = body
-        
+
         let billboard = SCNBillboardConstraint()
         billboard.freeAxes = .all
         grasshopper.constraints = [billboard]
-        
+
         enemyRoot.addChildNode(grasshopper)
     }
 
@@ -2752,15 +2647,15 @@ func setupGestures() {
         //--------------------------------------------------
 
         enemyRoot.childNodes.forEach {
-            $0.removeFromParentNode()
+            removeQueue.append($0)
         }
 
         effectsRoot.childNodes.forEach {
-            $0.removeFromParentNode()
+            removeQueue.append($0)
         }
 
         gridRoot.childNodes.forEach {
-            $0.removeFromParentNode()
+            removeQueue.append($0)
         }
 
 
@@ -2769,7 +2664,7 @@ func setupGestures() {
         //--------------------------------------------------
 
         activeLasers.forEach {
-            $0.removeFromParentNode()
+            removeQueue.append($0)
         }
 
         activeLasers.removeAll()
@@ -2816,18 +2711,7 @@ func setupGestures() {
 
         spawnLadybug()
 
-        /*
-        let headNode=spawnCentipedeHead(at: SCNVector3(-3, groundY + 5, 0))
 
-        spawnCentipedeSegment(
-            at: SCNVector3(
-                -1,
-                groundY + 5,
-                wallZ
-            ), follow:headNode
-        )
-         */
-        
         platformNode?.position.x = laserWorldPosition().x
     }
     func destroyLaser(
@@ -2835,7 +2719,7 @@ func setupGestures() {
         at position: SCNVector3
     ) {
         laser.physicsBody = nil
-        laser.removeFromParentNode()
+        removeQueue.append(laser)
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
@@ -2893,7 +2777,7 @@ struct ContentView: View {
 
             VStack {
                 Spacer()
-                Text("Tap to fire • Pan to move laser • Two-finger slash for AoE")
+                Text("Tap to fire • Long press for rapid fire")
                     .font(.caption2)
                     .foregroundColor(.white.opacity(0.6))
                     .padding(.horizontal, 12)
