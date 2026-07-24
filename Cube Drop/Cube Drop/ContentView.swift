@@ -154,6 +154,13 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     var cameraHeight: Float = -5
     var cameraYaw: Float = 0
     var cameraPitch: Float = -0.12
+    
+    private var isProcessingFrame = false
+    private var pendingRestart = false
+    private var pendingRespawnAllCubes = false
+    private var pendingNodeRemovals = [SCNNode]()
+    
+    var grasshopperFalling = Set<ObjectIdentifier>()
 
     var cubeDistanceFromGround: Float = 5.0
     @State var topY : Float = 0
@@ -1290,7 +1297,8 @@ func setupGestures() {
 
     func spawnBonusPointObject(at worldPosition: SCNVector3) {
         let root = SCNNode()
-
+           let kind = EntityNode(kind: .bonusPointObject, geometry: nil)
+        
         let dollarColor = UIColor.yellow
 
         let bar = SCNBox(
@@ -1324,6 +1332,8 @@ func setupGestures() {
 
         root.position = worldPosition
         root.renderingOrder = 100
+        
+
 
         let body = SCNPhysicsBody(type: .dynamic, shape: nil)
         body.categoryBitMask = PhysicsCategory.pointObject
@@ -1476,6 +1486,7 @@ func setupGestures() {
         let id = ObjectIdentifier(grasshopper)
         guard grasshopper.parent != nil else { return }
         guard !grasshopperJumping.contains(id) else { return }
+        guard !grasshopperFalling.contains(id) else { return }
         guard let player = playerNode else { return }
 
         grasshopperJumping.insert(id)
@@ -1485,7 +1496,7 @@ func setupGestures() {
         let directLeapDistance: Float = 1.8
 
         if playerDistance < directLeapDistance {
-            arcJump(grasshopper:grasshopper, target: player.presentation.worldPosition) { [weak self, weak grasshopper] in
+            arcJump(grasshopper: grasshopper, target: player.presentation.worldPosition) { [weak self, weak grasshopper] in
                 guard let self, let grasshopper, grasshopper.parent != nil else { return }
                 self.grasshopperJumping.remove(id)
                 self.checkGrasshopperLanding(grasshopper)
@@ -1496,12 +1507,12 @@ func setupGestures() {
         if let targetCube = nextJumpTarget(from: grasshopper, toward: player) {
             let cubePos = targetCube.presentation.worldPosition
             let landing = SCNVector3(cubePos.x, cubePos.y + Float(cubeSize) * 0.6, cubePos.z)
-            arcJump(grasshopper:grasshopper, target: landing) { [weak self] in
+            arcJump(grasshopper: grasshopper, target: landing) { [weak self] in
                 self?.grasshopperJumping.remove(id)
             }
         } else {
-            fallToGround(grasshopper)
             grasshopperJumping.remove(id)
+            fallToGround(grasshopper)
         }
     }
 
@@ -2300,55 +2311,50 @@ func setupGestures() {
         }
     }
     func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+        guard !isProcessingFrame else { return }
+        isProcessingFrame = true
+        defer { isProcessingFrame = false }
+
         let dt = lastUpdateTime == 0 ? 0 : time - lastUpdateTime
         lastUpdateTime = time
-        guard dt > 0, !gameState.isGameOver else { return }
+        guard dt > 0 else { return }
 
-        // updateDifficulty()
-        // if allCubesGone() { respawnAllCubes() }
+        if gameState.isGameOver {
+            applyPendingSceneMutations()
+            return
+        }
 
         updatePlayer()
-
         updateGrid(dt: dt)
 
-        gridOffset += gridDirection * gridSpeed * Float(dt)
-        gridRoot.position.x = gridOffset
-
-        scene.rootNode.enumerateChildNodes { node, _ in
-            guard let entity = node as? EntityNode else { return }
+        let entities = activeEntitySnapshot()
+        for node in entities {
+            guard let entity = node as? EntityNode else { continue }
             switch entity.kind {
             case .grasshopper:
-                self.updateGrasshopper(entity)
+                updateGrasshopper(entity)
             case .spider:
-                self.updateSpider(entity, dt: dt)
+                updateSpider(entity, dt: dt)
             case .ladybug:
-                self.updateLadybugMovement(entity, dt: dt)
+                updateLadybugMovement(entity, dt: dt)
+            case .fly:
+                updateFly(entity, dt: dt, removalList: &fliesToRemove)
             default:
                 break
             }
         }
 
-        scene.rootNode.enumerateChildNodes { node, _ in
-            guard let entity = node as? EntityNode, entity.kind == .centipedeHead else { return }
-            self.updateCentipedeHead(node, dt: dt)
-        }
+        let centipedeHeads = activeEntitySnapshot(kind: .centipedeHead)
+        for node in centipedeHeads { updateCentipedeHead(node, dt: dt) }
 
-        scene.rootNode.enumerateChildNodes { node, _ in
-            guard let entity = node as? EntityNode, entity.kind == .centipedeSegment else { return }
-            self.updateCentipedeSegment(node, dt: dt)
-        }
+        let centipedeSegments = activeEntitySnapshot(kind: .centipedeSegment)
+        for node in centipedeSegments { updateCentipedeSegment(node, dt: dt) }
 
         updateEntities(dt: dt)
         updateLasers(dt: dt)
 
-        scene.rootNode.enumerateChildNodes { node, _ in
-            guard let entity = node as? EntityNode, entity.kind == .fly else { return }
-            self.updateFly(entity, dt: dt, removalList: &fliesToRemove)
-        }
-
-        for fly in fliesToRemove {
-            removeQueue.append(fly)
-        }
+        for fly in fliesToRemove { queueRemoval(fly) }
+        fliesToRemove.removeAll()
 
         if autoFireEnabled, time - lastAutoFireTime >= autoFireInterval {
             fireLaser()
@@ -2362,15 +2368,150 @@ func setupGestures() {
 
         if time - lastFlySpawnTime >= flySpawnInterval {
             lastFlySpawnTime = time
-            if Int.random(in: 0...3) == 0 {
-                spawnFly()
-            }
+            if Int.random(in: 0...3) == 0 { spawnFly() }
         }
 
+        applyPendingSceneMutations()
         cleanRemoveQueue()
     }
+    func restartGame() {
+        pendingRestart = true
+    }
+
+    func performRestartGame() {
+        gameSessionID = UUID()
+        gameState.score = 0
+        gameState.combo = 0
+        gameState.isGameOver = false
+        gameState.difficulty = 1.0
+
+        gridDirection = 1
+        gridOffset = 0
+        gridRoot.position = SCNVector3Zero
+
+        enemyRoot.childNodes.forEach { removeQueue.append($0) }
+        effectsRoot.childNodes.forEach { removeQueue.append($0) }
+        gridRoot.childNodes.forEach { removeQueue.append($0) }
+
+        activeLasers.forEach { removeQueue.append($0) }
+        activeLasers.removeAll()
+
+        slots.removeAll()
+        slotMap.removeAll()
+
+        grasshopperJumping.removeAll()
+        centipedeDirection.removeAll()
+        centipedeDropping.removeAll()
+        spiderThreads.removeAll()
+        spiderAnchorY.removeAll()
+        ladybugDirection.removeAll()
+        fliesToRemove.removeAll()
+        flyWobble.removeAll()
+        flyChaos.removeAll()
+
+        setupGrid()
+        spawnGrasshopper()
+        spawnSpider()
+        spawnLadybug()
+
+        platformNode?.position.x = laserWorldPosition().x
+    }
+    func performRespawnAllCubes() {
+        let previousAutoFire = autoFireEnabled
+        autoFireEnabled = false
+
+        gameSessionID = UUID()
+        gridDirection = 1
+        gridOffset = 0
+        gridRoot.position = SCNVector3Zero
+
+        let nodesToRemove = enemyRoot.childNodes
+            + effectsRoot.childNodes
+            + gridRoot.childNodes
+            + activeLasers
+            + [playerNode, platformNode, cameraNode].compactMap { $0 }
+
+        pendingNodeRemovals.append(contentsOf: nodesToRemove)
+
+        activeLasers.removeAll()
+
+        grasshopperJumping.removeAll()
+        centipedeDirection.removeAll()
+        centipedeDropping.removeAll()
+        spiderThreads.removeAll()
+        spiderAnchorY.removeAll()
+        ladybugDirection.removeAll()
+        flyWobble.removeAll()
+        flyChaos.removeAll()
+        fliesToRemove.removeAll()
+
+        slots.removeAll()
+        slotMap.removeAll()
+
+        pendingRespawnAllCubes = false
+
+        setupGrid()
+        spawnGrasshopper()
+        spawnSpider()
+        spawnLadybug()
+
+        platformNode?.position.x = laserWorldPosition().x
+        autoFireEnabled = previousAutoFire
+    }
+    func applyPendingSceneMutations() {
+        let removals = pendingNodeRemovals
+        pendingNodeRemovals.removeAll()
+
+        for node in removals {
+            node.removeAllActions()
+            node.physicsBody = nil
+            node.removeFromParentNode()
+        }
+
+        if pendingRespawnAllCubes {
+            pendingRespawnAllCubes = false
+            performRespawnAllCubes()
+        }
+
+        if pendingRestart {
+            pendingRestart = false
+            performRestartGame()
+        }
+    }
+    func queueRemoval(_ node: SCNNode) {
+        guard node.parent != nil else { return }
+        pendingNodeRemovals.append(node)
+    }
+    func activeEntitySnapshot(kind: KnowledgeTree.EntityKind? = nil) -> [SCNNode] {
+        var nodes: [SCNNode] = []
+        scene.rootNode.enumerateChildNodes { node, _ in
+            guard let entity = node as? EntityNode else { return }
+            if let kind, entity.kind != kind { return }
+            nodes.append(node)
+        }
+        return nodes
+    }
+    func forceRemove(_ node: SCNNode) {
+        guard node.parent != nil else { return }
+        node.removeAllActions()
+        node.physicsBody = nil
+        node.constraints = nil
+        node.removeFromParentNode()
+    }
+    
     func cleanRemoveQueue() {
-        removeQueue.forEach { $0.removeFromParentNode() }
+        var seen = Set<ObjectIdentifier>()
+        for node in removeQueue {
+            let id = ObjectIdentifier(node)
+            if seen.insert(id).inserted {
+                if node.parent != nil {
+                    node.removeAllActions()
+                    node.physicsBody = nil
+                    node.constraints = nil
+                    node.removeFromParentNode()
+                }
+            }
+        }
         removeQueue.removeAll()
     }
 
@@ -2497,19 +2638,16 @@ func setupGestures() {
     
     func removeSpiderThread(for spider: SCNNode) {
         let id = ObjectIdentifier(spider)
-        
-        guard spiderThreads[id] != nil || spiderAnchorY[id] != nil else {
-            return
-        }
-        
-        // Unwrap optionals before appending to queue
-        if let thread = spiderThreads[id] {
-            removeQueue.append(thread)
-        }
-    
-        
+        let thread = spiderThreads[id]
         spiderThreads.removeValue(forKey: id)
         spiderAnchorY.removeValue(forKey: id)
+
+        if let thread, thread.parent != nil {
+            thread.removeAllActions()
+            thread.physicsBody = nil
+            thread.constraints = nil
+            removeQueue.append(thread)
+        }
     }
     //---------------------------------------------------------
     // LADYBUG AI
@@ -2618,102 +2756,7 @@ func setupGestures() {
         ufo.runAction(.repeatForever(cycle))
     }
 
-    func restartGame() {
-
-        //--------------------------------------------------
-        // Reset session
-        //--------------------------------------------------
-
-        gameSessionID = UUID()
-
-        gameState.score = 0
-        gameState.combo = 0
-        gameState.isGameOver = false
-        gameState.difficulty = 1.0
-
-
-        //--------------------------------------------------
-        // Reset grid movement
-        //--------------------------------------------------
-
-        gridDirection = 1
-        gridOffset = 0
-        gridRoot.position = SCNVector3Zero
-
-
-
-        //--------------------------------------------------
-        // Remove active objects
-        //--------------------------------------------------
-
-        enemyRoot.childNodes.forEach {
-            removeQueue.append($0)
-        }
-
-        effectsRoot.childNodes.forEach {
-            removeQueue.append($0)
-        }
-
-        gridRoot.childNodes.forEach {
-            removeQueue.append($0)
-        }
-
-
-        //--------------------------------------------------
-        // Remove lasers
-        //--------------------------------------------------
-
-        activeLasers.forEach {
-            removeQueue.append($0)
-        }
-
-        activeLasers.removeAll()
-
-
-
-        //--------------------------------------------------
-        // Reset cube data
-        //--------------------------------------------------
-
-        slots.removeAll()
-        slotMap.removeAll()
-
-
-
-        //--------------------------------------------------
-        // Reset AI tracking state
-        //--------------------------------------------------
-
-        grasshopperJumping.removeAll()
-        centipedeDirection.removeAll()
-        centipedeDropping.removeAll()
-        spiderThreads.removeAll()
-        spiderAnchorY.removeAll()
-        ladybugDirection.removeAll()
-
-
-
-        //--------------------------------------------------
-        // Rebuild world
-        //--------------------------------------------------
-
-        setupGrid()
-
-
-
-        //--------------------------------------------------
-        // Respawn enemies
-        //--------------------------------------------------
-
-        spawnGrasshopper()
-
-        spawnSpider()
-
-        spawnLadybug()
-
-
-        platformNode?.position.x = laserWorldPosition().x
-    }
+  
     func destroyLaser(
         _ laser: SCNNode,
         at position: SCNVector3
@@ -2802,6 +2845,8 @@ struct ContentView: View {
                         gameState.score = 0
                         gameState.combo = 0
                         gameState.isGameOver = false
+                        gameState.cameraLower = nil
+                        gameState.cameraRaise = nil
                         restartNonce = UUID()
                     } label: {
                         Text("Restart")
