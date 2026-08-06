@@ -47,8 +47,12 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     init(gameState: GameState) {
         self.gameState = gameState
-
+  
         super.init(nibName: nil, bundle: nil)
+      
+        self.gameState.setPlaySoundFlag = { [weak self] value in
+            self?.setPlaySoundFlag(paramPlaySoundFlag: value)
+        }
         self.gameState.cameraLower = { [weak self] in
             self?.cameraLower()
         }
@@ -183,6 +187,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     private var entityIndex: [ObjectIdentifier: EntityNode] = [:]
     
     var centipedeLeaders = Set<ObjectIdentifier>()          // <-- add this
+    
+    @Published var playSoundFlag: Bool = false
   
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -204,7 +210,10 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         sceneView.isPlaying = true
         sceneView.loops = true
     }
-
+    func setPlaySoundFlag(paramPlaySoundFlag : Bool)
+    {
+        self.playSoundFlag = paramPlaySoundFlag
+    }
     func setupScene() {
         scene = SCNScene()
 
@@ -326,7 +335,10 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             if !gameState.isGameOver {
                 gameState.isGameOver = true
                 spawnExplosion(at: contact.contactPoint, color: .red)
-                playSound(GameSound.gameOver.rawValue)
+                if playSoundFlag {
+                    playSound(GameSound.gameOver.rawValue)
+                }
+                
             }
             removeQueue.append(a)
             return
@@ -336,7 +348,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             if !gameState.isGameOver {
                 gameState.isGameOver = true
                 spawnExplosion(at: contact.contactPoint, color: .red)
-                playSound(GameSound.gameOver.rawValue)
+                if playSoundFlag {
+                    playSound(GameSound.gameOver.rawValue)}
             }
             removeQueue.append(b)
             return
@@ -1367,7 +1380,10 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         let color = (node.geometry?.firstMaterial?.emission.contents as? UIColor) ?? .cyan
 
-        playSound(kind == .missile ? GameSound.missileHit.rawValue : GameSound.enemyDestroyed.rawValue)
+        if playSoundFlag
+        {
+            playSound(kind == .missile ? GameSound.missileHit.rawValue : GameSound.enemyDestroyed.rawValue)
+        }
 
         // --------------------------------------------------
         // CUBE DESTROYED
@@ -1377,7 +1393,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
                 slots[slot.row][slot.col].node = nil
                 removeQueue.append(node)
             }
-            playSound(GameSound.cubeHit.rawValue)
+            if playSoundFlag {
+                playSound(GameSound.cubeHit.rawValue)}
             return
         }
 
@@ -1678,7 +1695,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         addEntity(bolt, to:scene.rootNode)
         activeLasers.append(bolt)
-        playSound(GameSound.laserFire.rawValue)
+        if playSoundFlag {
+            playSound(GameSound.laserFire.rawValue)
+        }
     }
 
     func laserWorldPosition() -> SCNVector3 {
@@ -2050,8 +2069,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         if let k = kind(of: node) {
             cleanupTrackingState(for: node, kind: k)
         }
-
-        playSound(GameSound.gameOver.rawValue)
+        if playSoundFlag {
+            playSound(GameSound.gameOver.rawValue)
+        }
 
         // Stage for removal; actual removal happens in cleanRemoveQueue
         if node.parent != nil {
@@ -2078,7 +2098,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             if gridRoot.position.y <= -4.5 {
                 if !gameState.isGameOver {
                     gameState.isGameOver = true
-                    playSound(GameSound.gameOver.rawValue)
+                    if playSoundFlag {
+                        playSound(GameSound.gameOver.rawValue)
+                    }
                 }
             }
         }
@@ -2406,8 +2428,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             self.gameState.score = max(0, self.gameState.score - 25)
             self.gameState.combo = 0
         }
-
-        playSound(GameSound.enemyDestroyed.rawValue)
+        if playSoundFlag {
+            playSound(GameSound.enemyDestroyed.rawValue)
+        }
         spawnExplosion(at: node.presentation.worldPosition, color: .systemYellow)
 
         // Centralized destruction + staging for removal
@@ -2977,21 +3000,44 @@ struct ContentView: View {
                 .ignoresSafeArea()
 
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1) {
                     Text("Score: \(gameState.score)")
-                        .font(.title2.bold())
+                        .font(.system(size: 14, weight: .bold))
                         .foregroundColor(.white)
+
                     Text("Combo: \(gameState.combo)x")
-                        .font(.subheadline)
+                        .font(.system(size: 11))
                         .foregroundColor(.cyan)
-                    HStack {
-                        Button("Lower Camera") { gameState.cameraLower?() }
+
+                    HStack(spacing: 6) {
+                        Button("Lower Camera") {
+                            gameState.cameraLower?()
+                        }
+                        .font(.system(size: 10))
+                        .controlSize(.mini)
+
                         Spacer()
-                        Button("Raise Camera") { gameState.cameraRaise?() }
+
+                        Button("Raise Camera") {
+                            gameState.cameraRaise?()
+                        }
+                        .font(.system(size: 10))
+                        .controlSize(.mini)
+
+                        Spacer()
+
+                        Toggle(
+                            gameState.playSoundFlag ? "Sound On" : "Sound Off",
+                            isOn: $gameState.playSoundFlag
+                        )
+                        .font(.system(size: 10))
+                        .controlSize(.mini)
+                        .onChange(of: gameState.playSoundFlag) { _, newValue in
+                            gameState.setPlaySoundFlag?(newValue)
+                        }
                     }
                 }
-                .padding()
-                Spacer()
+                .padding(6)
             }
             .padding(.top, 40)
 

@@ -472,9 +472,12 @@ final class GameState: ObservableObject {
     @Published var combo: Int = 0
     @Published var isGameOver: Bool = false
     @Published var difficulty: Double = 1.0
+    @Published var playSoundFlag = true
 
     var cameraLower: (() -> Void)?
     var cameraRaise: (() -> Void)?
+    var setPlaySoundFlag: ((Bool) -> Void)?
+
 }
 
 final class EntityNode: SCNNode {
