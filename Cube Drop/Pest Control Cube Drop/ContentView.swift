@@ -99,6 +99,10 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     
     private var lastUFOCheckTime: TimeInterval = 0
     private var ufoCheckInterval: TimeInterval = 2.0  // check every 2 seconds
+    
+    var centipedeBounces: [ObjectIdentifier: Int] = [:]
+    var centipedeBounceTargetX: [ObjectIdentifier: Float] = [:]
+    var centipedeJustHitGround: [ObjectIdentifier: Bool] = [:]  // new
 
     var laserColumn: Int = 8
     var gridDirection: Float = 1
@@ -136,6 +140,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     // Centipede AI state
     var centipedeDirection: [ObjectIdentifier: Float] = [:]
     var centipedeDropping = Set<ObjectIdentifier>()
+    var grasshopperLeaping = Set<ObjectIdentifier>()
 
     // Spider AI state
     var spiderAnchorY: [ObjectIdentifier: Float] = [:]
@@ -155,14 +160,20 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     var cameraHeight: Float = -5
     var cameraYaw: Float = 0
     var cameraPitch: Float = -0.12
+    private var lastGrasshopperSpawnTime: TimeInterval = 0
+    private var grasshopperSpawnInterval: TimeInterval = 6.0
     
     private var isProcessingFrame = false
     private var pendingRestart = false
     private var pendingRespawnAllCubes = false
-    private var pendingNodeRemovals = [SCNNode]()
+    //private var pendingNodeRemovals = [SCNNode]()
     private var skySphere: SCNNode?
     
+    // Add these properties to your class:
+    var centipedeFalling = Set<ObjectIdentifier>()
     var grasshopperFalling = Set<ObjectIdentifier>()
+    let gravity: Float = -4.0
+
 
     var cubeDistanceFromGround: Float = 5.0
     private lazy var cubeNormalMap: UIImage? = {
@@ -170,7 +181,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     }()
     @State var topY : Float = 0
     private var entityIndex: [ObjectIdentifier: EntityNode] = [:]
-
+    
+    var centipedeLeaders = Set<ObjectIdentifier>()          // <-- add this
+  
     override func viewDidLoad() {
         super.viewDidLoad()
         setupScene()
@@ -186,7 +199,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         spawnLadybug()
         spawnFly()
         scene.physicsWorld.contactDelegate = self
-        scene.physicsWorld.gravity = SCNVector3Zero
+        scene.physicsWorld.gravity =  SCNVector3(0, gravity, 0)
         sceneView.delegate = self
         sceneView.isPlaying = true
         sceneView.loops = true
@@ -208,6 +221,45 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         scene.rootNode.addChildNode(effectsRoot)
 
         setupSkySphere()
+    }
+    func replaceSegmentWithHead(_ segment: SCNNode, inheritFrom oldHead: SCNNode?) -> SCNNode {
+        let oldHeadID = oldHead.map { ObjectIdentifier($0) }
+        let segmentID = ObjectIdentifier(segment)
+
+        // Remember position & direction
+        let worldPos = segment.presentation.worldPosition
+        let direction = oldHeadID.flatMap { centipedeDirection[$0] } ?? centipedeDirection[segmentID] ?? 1.0
+
+        // Remove old segment from tracking
+        centipedeFollowTarget.removeValue(forKey: segmentID)
+        centipedeDirection.removeValue(forKey: segmentID)
+        centipedeLastPosition.removeValue(forKey: segmentID)
+
+        // Remove segment from scene (it will be cleaned up via removeQueue)
+        removeQueue.append(segment)
+
+        // Spawn a new head at the same position
+        let newHead = spawnCentipedeHead(at: worldPos)
+        let newHeadID = ObjectIdentifier(newHead)
+
+        // Set direction
+        centipedeDirection[newHeadID] = direction
+
+        // Update any segment that was following the old head OR this segment to follow the new head
+        for (segID, target) in centipedeFollowTarget {
+            let targetID = ObjectIdentifier(target)
+            if let oldID = oldHeadID, targetID == oldID || targetID == segmentID {
+                centipedeFollowTarget[segID] = newHead
+            }
+        }
+
+        // Update leaders set
+        if let oldID = oldHeadID {
+            centipedeLeaders.remove(oldID)
+        }
+        centipedeLeaders.insert(newHeadID)
+
+        return newHead
     }
     func physicsWorld(_ world: SCNPhysicsWorld, didBegin contact: SCNPhysicsContact) {
         let a = contact.nodeA
@@ -321,7 +373,18 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             handleFlyHitPlayer(fly: b)
             return
         }
+        // --------------------------------------------------
+        // FLY HITS GROUND -> DEDUCT POINTS, REMOVE FLY
+        // --------------------------------------------------
+        if categoryA == PhysicsCategory.fly && categoryB == PhysicsCategory.ground {
+            handleFlyHitGround(fly: a)
+            return
+        }
 
+        if categoryB == PhysicsCategory.fly && categoryA == PhysicsCategory.ground {
+            handleFlyHitGround(fly: b)
+            return
+        }
         // --------------------------------------------------
         // POINT / BONUS OBJECT HITS GROUND
         // --------------------------------------------------
@@ -470,7 +533,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     }
     @discardableResult
       func addEntity(_ node: EntityNode, to parent: SCNNode? = nil) -> EntityNode {
-          registerEntity(node)
+         // registerEntity(node)
           let targetParent = parent ?? enemyRoot
           targetParent.addChildNode(node)
           return node
@@ -1212,7 +1275,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     func cleanupTrackingState(for node: SCNNode, kind: KnowledgeTree.EntityKind) {
         let id = ObjectIdentifier(node)
-
         switch kind {
         case .spider:
             removeSpiderThread(for: node)
@@ -1220,6 +1282,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             ladybugDirection.removeValue(forKey: id)
         case .grasshopper:
             grasshopperJumping.remove(id)
+            grasshopperFalling.remove(id)   // ensure this
         case .centipedeHead, .centipedeSegment:
             centipedeDirection.removeValue(forKey: id)
             centipedeDropping.remove(id)
@@ -1227,7 +1290,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             break
         }
     }
-
     func resolveHit(
         attacker: KnowledgeTree.EntityKind,
         target: SCNNode,
@@ -1320,22 +1382,82 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         }
 
         // --------------------------------------------------
-        // ENEMIES THAT SHOULD BE REMOVED ON HIT
+        // CENTIPEDE HEAD DESTROYED -> PROMOTE FIRST SEGMENT TO HEAD
+        // --------------------------------------------------
+        if kind == .centipedeHead {
+            spawnExplosion(at: point, color: .systemYellow)
+
+            let headID = ObjectIdentifier(node)
+
+            // Find the first segment that was following this head
+            var firstSegment: SCNNode?
+            for (segID, target) in centipedeFollowTarget {
+                if ObjectIdentifier(target) == headID {
+                    if let segNode = enemyRoot.childNodes.first(where: {
+                        ObjectIdentifier($0) == segID
+                    }) {
+                        firstSegment = segNode
+                        break
+                    }
+                }
+            }
+
+            // Replace that segment with a new head
+            if let first = firstSegment {
+                replaceSegmentWithHead(first, inheritFrom: node)
+            } else {
+                // No segments left; just remove head from leaders
+                centipedeLeaders.remove(headID)
+            }
+
+            // Remove old head
+            removeQueue.append(node)
+            spawnMushroomFunc(at: point)
+            return
+        }
+
+        // --------------------------------------------------
+        // CENTIPEDE SEGMENT DESTROYED -> REWIRE CHAIN
+        // --------------------------------------------------
+        if kind == .centipedeSegment {
+            spawnExplosion(at: point, color: .systemYellow)
+
+            let segID = ObjectIdentifier(node)
+
+            // Find the segment (if any) that was following this one
+            var follower: SCNNode?
+            for (fID, target) in centipedeFollowTarget {
+                if ObjectIdentifier(target) == segID {
+                    if let fNode = enemyRoot.childNodes.first(where: {
+                        ObjectIdentifier($0) == fID
+                    }) {
+                        follower = fNode
+                        break
+                    }
+                }
+            }
+
+            // Make the follower follow whatever this segment was following
+            if let f = follower, let leader = centipedeFollowTarget[segID] {
+                centipedeFollowTarget[ObjectIdentifier(f)] = leader
+            }
+
+            // Remove this segment
+            removeQueue.append(node)
+            spawnMushroomFunc(at: point)
+            return
+        }
+
+        // --------------------------------------------------
+        // OTHER ENEMIES THAT SHOULD BE REMOVED ON HIT
         // --------------------------------------------------
         if kind == .fly ||
            kind == .grasshopper ||
-           kind == .centipedeHead ||
-           kind == .centipedeSegment ||
            kind == .ladybug ||
            kind == .spider ||
            kind == .ufo {
             spawnExplosion(at: point, color: .systemYellow)
             removeQueue.append(node)
-
-            // Centipede segments (and head) also spawn mushrooms
-            if kind == .centipedeHead || kind == .centipedeSegment {
-                spawnMushroomFunc(at: point)
-            }
             return
         }
 
@@ -1354,7 +1476,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         if kind == .bonusPointObject {
             spawnExplosion(at: point, color: .yellow)
             removeQueue.append(node)
-
             return
         }
 
@@ -1567,31 +1688,36 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     }
 
     func fallToGround(_ grasshopper: SCNNode) {
-        let targetY = groundY + 0.4
+        let id = ObjectIdentifier(grasshopper)
+        guard grasshopper.parent != nil else { return }
 
+        grasshopperFalling.insert(id)
+
+        let targetY = groundY + 0.4
         let fall = SCNAction.move(
             to: SCNVector3(grasshopper.position.x, targetY, grasshopper.position.z),
             duration: 0.55
         )
         fall.timingMode = .easeIn
 
-        let finish = SCNAction.run { [weak self] node in
-            guard let self = self else { return }
+        let finish = SCNAction.run { [weak self, weak grasshopper] _ in
+            guard let self = self, let gh = grasshopper, gh.parent != nil else { return }
+
+            self.grasshopperFalling.remove(ObjectIdentifier(gh))
 
             if let player = self.playerNode {
                 let dist = self.distanceBetween(
-                    node.presentation.worldPosition,
+                    gh.presentation.worldPosition,
                     player.presentation.worldPosition
                 )
                 if dist < 1.2 {
-                    self.triggerGameOverFromEnemyContact(node: node, at: node.presentation.worldPosition)
+                    self.triggerGameOverFromEnemyContact(node: gh, at: gh.presentation.worldPosition)
                     return
                 }
             }
 
-            // No player hit → destroy as grasshopper
-            self.spawnExplosion(at: node.presentation.worldPosition, color: .brown)
-            self.destroy(node: node, kind: .grasshopper, at: node.presentation.worldPosition)
+            self.spawnExplosion(at: gh.presentation.worldPosition, color: .brown)
+            self.removeQueue.append(gh)
         }
 
         grasshopper.runAction(.sequence([fall, finish]))
@@ -1612,68 +1738,74 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     func updateGrasshopper(_ grasshopper: SCNNode) {
         let id = ObjectIdentifier(grasshopper)
         guard grasshopper.parent != nil else { return }
-        guard !grasshopperJumping.contains(id) else { return }
         guard !grasshopperFalling.contains(id) else { return }
         guard let player = playerNode else { return }
 
-        grasshopperJumping.insert(id)
-
         let currentPos = grasshopper.presentation.worldPosition
-        let playerDistance = distanceBetween(currentPos, player.presentation.worldPosition)
-        let directLeapDistance: Float = 1.8
+        let groundLevel = groundY + 0.4
 
-        // Direct leap toward the player
-        if playerDistance < directLeapDistance {
-            arcJump(grasshopper: grasshopper, target: player.presentation.worldPosition) { [weak self, weak grasshopper] in
-                guard let self = self, let grasshopper = grasshopper, grasshopper.parent != nil else { return }
-                self.grasshopperJumping.remove(id)
-                self.checkGrasshopperLanding(grasshopper)
-            }
+        // Still in the air: let physics move it
+        if currentPos.y > groundLevel {
             return
         }
 
-        // Jump to nearest cube toward the player
-        if let targetCube = nextJumpTarget(from: grasshopper, toward: player) {
-            let cubePos = targetCube.presentation.worldPosition
-            let landing = SCNVector3(
-                cubePos.x,
-                cubePos.y + Float(cubeSize) * 0.6,
-                cubePos.z
-            )
-            arcJump(grasshopper: grasshopper, target: landing) { [weak self] in
-                self?.grasshopperJumping.remove(id)
-            }
+        // Landed on ground
+        grasshopperFalling.remove(id)
+        grasshopperLeaping.remove(id)
+
+        let playerPos = player.presentation.worldPosition
+        let dist = distanceBetween(currentPos, playerPos)
+
+        if dist < 1.2 {
+            // Hit the player → game over
+            triggerGameOverFromEnemyContact(node: grasshopper, at: currentPos)
         } else {
-            // No reachable cube: fall to ground and let fallToGround handle removal
-            grasshopperJumping.remove(id)
-            fallToGround(grasshopper)
+            // Landed safely → remove
+            removeQueue.append(grasshopper)
         }
     }
+    func physicsLeap(grasshopper: SCNNode, xDirection: Float) {
 
-    func arcJump(grasshopper: SCNNode, target: SCNVector3, completion: (() -> Void)? = nil) {
-        let start = grasshopper.presentation.worldPosition
-        let height: Float = 1.8
+        let id = ObjectIdentifier(grasshopper)
 
-        let mid = SCNVector3(
-            (start.x + target.x) / 2,
-            max(start.y, target.y) + height,
-            (start.z + target.z) / 2
+        guard let body = grasshopper.physicsBody else {
+            print("Grasshopper has no physics body")
+            return
+        }
+
+        grasshopperLeaping.insert(id)
+
+        let dir: Float = xDirection < 0 ? -1.0 : 1.0
+
+        // Horizontal jump force
+        let horizontalForce: Float = Float.random(in: 0.2...0.2)
+
+        // Upward jump force
+        let jumpForce: Float = 0.6
+
+        // Clear old movement
+        body.clearAllForces()
+        body.angularVelocity = SCNVector4(0, 0, 0, 0)
+
+        // Apply a physics impulse
+        let impulse = SCNVector3(
+            dir * horizontalForce,
+            jumpForce,
+            0
         )
 
-        let moveUp = SCNAction.move(to: mid, duration: 0.25)
-        moveUp.timingMode = .easeOut
+        body.applyForce(impulse, asImpulse: true)
 
-        let moveDown = SCNAction.move(to: target, duration: 0.25)
-        moveDown.timingMode = .easeIn
+        // Make sure gravity affects it
+        body.isAffectedByGravity = true
 
-        let finish = SCNAction.run { [weak grasshopper] _ in
-            guard grasshopper?.parent != nil else { return }
-            completion?()
-        }
-
-        grasshopper.runAction(.sequence([moveUp, moveDown, finish]))
+        print("""
+        Grasshopper leap:
+        Velocity: \(body.velocity)
+        Gravity: \(body.isAffectedByGravity)
+        """)
     }
-
+ 
     func checkGrasshopperLanding(_ grasshopper: SCNNode) {
         guard grasshopper.parent != nil else { return }
         guard let player = playerNode else { return }
@@ -1970,7 +2102,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         if centipedeDropping.contains(id) { return }
 
         guard let player = playerNode else {
-            // No player? fall back to basic movement
             updateCentipedeHeadBasic(node, dt: dt)
             return
         }
@@ -1981,11 +2112,51 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         let current = node.position
         let playerPos = player.position
 
-        // Desired direction: toward player's X
+        // ------------------------------------------------------
+        // GROUND BOUNCE MODE
+        // ------------------------------------------------------
+        let groundLevel = groundY + 0.6  // approximate ground contact Y
+        let isOnGround = current.y <= groundLevel
+
+        // If we were falling and now we're on the ground, we just landed
+        if isOnGround && centipedeFalling.contains(id) {
+            centipedeFalling.remove(id)          // clear falling flag
+            // Start bounce mode once
+            centipedeBounces[id] = 180           // ~3 seconds at 60 FPS; tune as needed
+            centipedeBounceTargetX[id] = playerPos.x
+        }
+
+        if let bounces = centipedeBounces[id], bounces > 0 {
+            // Horizontal movement toward player during bounce phase
+            let targetX = centipedeBounceTargetX[id] ?? playerPos.x
+            let speed: Float = 1.4 * Float(gameState.difficulty)
+
+            let direction: Float = (targetX > current.x) ? 1.0 : -1.0
+            let step = direction * speed * Float(dt)
+            var nextX = current.x + step
+
+            // Clamp to arena
+            nextX = max(-halfWidth + pitch / 2, min(halfWidth - pitch / 2, nextX))
+
+            node.position = SCNVector3(nextX, current.y, current.z)
+            node.physicsBody?.resetTransform()
+            centipedeLastPosition[id] = node.presentation.worldPosition
+
+            // Decrement bounce counter per frame
+            centipedeBounces[id] = bounces - 1
+            if centipedeBounces[id] ?? 0 <= 0 {
+                centipedeBounces.removeValue(forKey: id)
+                centipedeBounceTargetX.removeValue(forKey: id)
+            }
+            return
+        }
+
+        // ------------------------------------------------------
+        // NORMAL MOVEMENT (ABOVE GROUND)
+        // ------------------------------------------------------
         let desiredDirection: Float = (playerPos.x > current.x) ? 1.0 : -1.0
         let currentDirection = centipedeDirection[id] ?? 1.0
 
-        // Try to move in desired direction if it's not blocked
         let speed: Float = 1.2 * Float(gameState.difficulty)
         let step = desiredDirection * speed * Float(dt)
         let nextTowardPlayer = SCNVector3(current.x + step, current.y, current.z)
@@ -1998,7 +2169,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             isCentipedePathBlocked(at: nextTowardPlayer, excluding: node)
 
         if !hitsEdgeTowardPlayer && !pathBlockedTowardPlayer {
-            // Clear path toward player: use that direction
             centipedeDirection[id] = desiredDirection
             node.position = SCNVector3(current.x + step, current.y, current.z)
             node.physicsBody?.resetTransform()
@@ -2006,7 +2176,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             return
         }
 
-        // Otherwise, if current direction is still possible, keep it
         let stepCurrent = currentDirection * speed * Float(dt)
         let nextCurrent = SCNVector3(current.x + stepCurrent, current.y, current.z)
         let hitsEdgeCurrent =
@@ -2027,6 +2196,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         dropCentipedeRow(node)
 
         centipedeLastPosition[id] = node.presentation.worldPosition
+
+        // Remove the old "start bounce here" block; landing is now handled above.
     }
     func updateCentipedeHeadBasic(_ node: SCNNode, dt: TimeInterval) {
         let id = ObjectIdentifier(node)
@@ -2088,11 +2259,10 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         let id = ObjectIdentifier(node)
         guard !centipedeDropping.contains(id) else { return }
         centipedeDropping.insert(id)
+        centipedeFalling.insert(id)  // mark as falling
 
         let pitch = Float(cubeSize + cubeSpacing)
-
-        // Choose drop amount: maybe skip a row if the next one is very blocked
-        let dropAmount: Float = pitch  // can be 2*pitch if you want bigger drops
+        let dropAmount: Float = pitch
 
         let drop = SCNAction.moveBy(x: 0, y: CGFloat(-dropAmount), z: 0, duration: 0.2)
         drop.timingMode = .easeInEaseOut
@@ -2104,6 +2274,25 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         }
 
         node.runAction(.sequence([drop, finish]))
+    }
+    func checkCentipedeReachedBottom(_ node: SCNNode) {
+        guard let kind = kind(of: node),
+              kind == .centipedeHead || kind == .centipedeSegment else { return }
+
+        let pos = node.presentation.worldPosition
+        let groundLevel = groundY + 0.6
+
+        if pos.y <= groundLevel, let player = playerNode, kind == .centipedeHead {
+            let id = ObjectIdentifier(node)
+
+            // Start or continue bounce mode
+            if centipedeBounces[id] == nil {
+                centipedeBounces[id] = 180  // total bounce duration in frames; tune as needed
+            }
+
+            // On each ground hit, refresh target X toward player
+            centipedeBounceTargetX[id] = player.position.x
+        }
     }
 
     func updateCentipedeSegment(_ node: SCNNode, dt: TimeInterval) {
@@ -2252,9 +2441,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             flyChaos[id] = Float.random(in: 3.5...7.5)
         }
 
-        let bound: Float = 7.5
+        let bound: Float = 3.5
         pos.x = max(-bound, min(bound, pos.x))
-        pos.y = min(groundY + 7.0, max(groundY + 1.0, pos.y))
+        pos.y = min(groundY + 7.0, max(groundY , pos.y))
 
         fly.position = pos
 
@@ -2265,6 +2454,21 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             destroy(node: fly, kind: .fly, at: fly.presentation.worldPosition)
         }
     }
+    func handleFlyHitGround(fly: SCNNode) {
+        guard let kind = kind(of: fly), kind == .fly else { return }
+
+        // Deduct points (tune the penalty as desired)
+        let penalty = 50
+        DispatchQueue.main.async {
+            self.gameState.score -= penalty
+        }
+
+        // Optional: visual feedback
+        spawnExplosion(at: fly.presentation.worldPosition, color: .systemGray)
+
+        // Remove the fly
+        removeQueue.append(fly)
+    }
     func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
         guard !isProcessingFrame else { return }
         isProcessingFrame = true
@@ -2274,39 +2478,90 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         lastUpdateTime = time
         guard dt > 0 else { return }
 
-        if gameState.isGameOver {
-            applyPendingSceneMutations()
-            return
-        }
+        //if gameState.isGameOver {
+        //    applyPendingSceneMutations()
+        //    return
+        //}
 
         updatePlayer()
         updateGrid(dt: dt)
         updateLasers(dt: dt)
         updateEntities(dt: dt)
         
+        if time - lastGrasshopperSpawnTime > grasshopperSpawnInterval {
+                spawnGrasshopper()
+                lastGrasshopperSpawnTime = time
+        }
+
         spawnUFOIfNeeded()
 
-        let allEntities = activeEntitySnapshot()
-        for entity in allEntities {
-            switch entity.kind {
-            case .grasshopper: updateGrasshopper(entity)
-            case .spider:      updateSpider(entity, dt: dt)
-            case .ladybug:     updateLadybugMovement(entity, dt: dt)
-            case .fly:         updateFly(entity, dt: dt)
-            default: break
+        // ---- Search scene directly for mobile enemies ----
+
+        var mobileEnemies: [EntityNode] = []
+        enemyRoot.enumerateChildNodes { node, _ in
+            guard let e = node as? EntityNode else { return }
+            switch e.kind {
+            case .grasshopper, .spider, .ladybug, .fly:
+                mobileEnemies.append(e)
+            default:
+                break
             }
         }
 
-        let heads = activeEntitySnapshot(kind: .centipedeHead)
-        for head in heads { updateCentipedeHead(head, dt: dt) }
+        for entity in mobileEnemies {
+            switch entity.kind {
+            case .grasshopper:  updateGrasshopper(entity)
+            case .spider:       updateSpider(entity, dt: dt)
+            case .ladybug:      updateLadybugMovement(entity, dt: dt)
+            case .fly:          updateFly(entity, dt: dt)
+            default:            break
+            }
+        }
 
-        let segments = activeEntitySnapshot(kind: .centipedeSegment)
-        for segment in segments { updateCentipedeSegment(segment, dt: dt) }
+        // ---- Centipede heads ----
+
+        var heads: [EntityNode] = []
+        enemyRoot.enumerateChildNodes { node, _ in
+            guard let e = node as? EntityNode, e.kind == .centipedeHead else { return }
+            heads.append(e)
+        }
+
+        for head in heads {
+            updateCentipedeHead(head, dt: dt)
+        }
+
+        // ---- Centipede segments ----
+
+        var segments: [EntityNode] = []
+        enemyRoot.enumerateChildNodes { node, _ in
+            guard let e = node as? EntityNode, e.kind == .centipedeSegment else { return }
+            segments.append(e)
+        }
+
+        for segment in segments {
+            updateCentipedeSegment(segment, dt: dt)
+        }
+
+        // ---- Cleanup ----
 
         cleanRemoveQueue()
-        applyPendingSceneMutations()
+        //applyPendingSceneMutations()
+    }
+    func enumerateEntities(ofKind kind: KnowledgeTree.EntityKind, in root: SCNNode, body: (EntityNode) -> Void) {
+        root.enumerateChildNodes { node, _ in
+            guard let e = node as? EntityNode, e.kind == kind else { return }
+            body(e)
+        }
     }
 
+    func enumerateEntities(ofKinds kinds: [KnowledgeTree.EntityKind],
+                           in root: SCNNode,
+                           body: (EntityNode) -> Void) {
+        root.enumerateChildNodes { node, _ in
+            guard let e = node as? EntityNode, kinds.contains(e.kind) else { return }
+            body(e)
+        }
+    }
     func restartGame() {
         pendingRestart = true
     }
@@ -2365,7 +2620,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             + activeLasers
             + [playerNode, platformNode, cameraNode].compactMap { $0 }
 
-        pendingNodeRemovals.append(contentsOf: nodesToRemove)
+        //pendingNodeRemovals.append(contentsOf: nodesToRemove)
         activeLasers.removeAll()
 
         grasshopperJumping.removeAll()
@@ -2391,7 +2646,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         platformNode?.position.x = laserWorldPosition().x
         autoFireEnabled = previousAutoFire
     }
-
+/*
     func applyPendingSceneMutations() {
         let removals = pendingNodeRemovals
         pendingNodeRemovals.removeAll()
@@ -2412,34 +2667,28 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             performRestartGame()
         }
     }
-
-    func queueRemoval(_ node: SCNNode) {
-        guard node.parent != nil else { return }
-        pendingNodeRemovals.append(node)
-    }
+*/
+    //func queueRemoval(_ node: SCNNode) {
+     //   guard node.parent != nil else { return }
+    //    pendingNodeRemovals.append(node)
+   // }
 
     func activeEntitySnapshot(kind filterKind: KnowledgeTree.EntityKind? = nil) -> [EntityNode] {
         let localIndex = entityIndex
 
         var validEntities: [EntityNode] = []
-        var badEntities: [EntityNode] = []
 
-        for (key, entity) in localIndex {
+        for (_, entity) in localIndex {
             guard
                 entity.parent != nil,
                 !entity.isHidden,
                 entity.presentation != nil
             else {
-                badEntities.append(entity)
+                // Do NOT unregister or queue here; defer to cleanRemoveQueue
                 continue
             }
 
             validEntities.append(entity)
-        }
-
-        // Instead of unregistering here, just queue them for removal
-        for entity in badEntities {
-            removeQueue.append(entity)
         }
 
         return validEntities.filter { entity in
@@ -2449,7 +2698,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             return true
         }
     }
-
     func forceRemove(_ node: SCNNode) {
         guard node.parent != nil else { return }
         node.removeAllActions()
@@ -2466,7 +2714,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             guard seen.insert(id).inserted else { continue }
             
             if node.parent != nil {
-                unregisterEntity(node)
+                //unregisterEntity(node)
                 if let kind = kind(of: node) {
                     cleanupTrackingState(for: node, kind: kind)
                 }
@@ -2482,18 +2730,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
  
 
-    func checkCentipedeReachedBottom(_ node: SCNNode) {
-        guard let player = playerNode else { return }
-        if node.presentation.worldPosition.y <= player.presentation.worldPosition.y + 0.6 {
-            let riseBack = SCNAction.moveBy(
-                x: 0,
-                y: CGFloat(Float(gridHeight) * Float(cubeSize + cubeSpacing)),
-                z: 0,
-                duration: 0.5
-            )
-            node.runAction(riseBack)
-        }
-    }
+   
 
     func updateSpider(_ node: SCNNode, dt: TimeInterval) {
         let speed: Float = 0.55 * Float(gameState.difficulty)
@@ -2542,13 +2779,13 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         thread.position = SCNVector3(current.x, anchorY - length / 2, current.z)
     }
 
-    func registerEntity(_ node: EntityNode) {
-        entityIndex[ObjectIdentifier(node)] = node
-    }
+    //func registerEntity(_ node: EntityNode) {
+    //    entityIndex[ObjectIdentifier(node)] = node
+   // }
 
-    func unregisterEntity(_ node: SCNNode) {
-        entityIndex.removeValue(forKey: ObjectIdentifier(node))
-    }
+   // func unregisterEntity(_ node: SCNNode) {
+    //    entityIndex.removeValue(forKey: ObjectIdentifier(node))
+   // }
 
     func removeSpiderThread(for spider: SCNNode) {
         let id = ObjectIdentifier(spider)
@@ -2600,28 +2837,47 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     func spawnGrasshopper() {
         let size = cubeSize * 1.35
-
         let plane = makeLabelBillboard(text: "🦗", color: nil, worldSize: size)
+
+        let pitch = Float(cubeSize + cubeSpacing)
+        let halfWidth = Float(gridWidth) * pitch / 2
+
+        let randomX = Float.random(in: (-halfWidth + pitch)...(halfWidth - pitch))
 
         let grasshopper = EntityNode(kind: .grasshopper, geometry: plane)
         grasshopper.name = "Grasshopper"
-        grasshopper.position = SCNVector3(0, topOfGridY(), 0)
+        grasshopper.position = SCNVector3(randomX, topOfGridY(), wallZ)
         grasshopper.renderingOrder = 115
         grasshopper.scale = SCNVector3(1.15, 1.15, 1.15)
 
-        let body = SCNPhysicsBody(type: .kinematic, shape: labelPhysicsShape(size: size * 1.1))
+        // Physics
+        let body = SCNPhysicsBody(type: .dynamic, shape: nil)
+        body.mass = 0.2
+        body.isAffectedByGravity = true
+        body.restitution = 0.0
+        body.friction = 0.5
+        body.rollingFriction = 0.5
+        body.damping = 0.1
+        body.angularDamping = 1.0
+
         body.categoryBitMask = PhysicsCategory.grasshopper
-        body.contactTestBitMask = PhysicsCategory.cube | PhysicsCategory.player | PhysicsCategory.laser
-        body.collisionBitMask = PhysicsCategory.none
+        body.contactTestBitMask =
+            PhysicsCategory.cube |
+            PhysicsCategory.player |
+            PhysicsCategory.laser
+
+        // Allow collisions with cubes and player
+        body.collisionBitMask =
+            PhysicsCategory.cube |
+            PhysicsCategory.player
+
         grasshopper.physicsBody = body
 
-        let billboard = SCNBillboardConstraint()
-        billboard.freeAxes = .all
-        grasshopper.constraints = [billboard]
+        addEntity(grasshopper, to: enemyRoot)
 
-        addEntity(grasshopper,to:enemyRoot)
+        let xDirection: Float = Bool.random() ? 1.0 : -1.0
+        physicsLeap(grasshopper: grasshopper, xDirection: xDirection)
     }
-
     func spawnUFOIfNeeded() {
         // Only check periodically, not every frame
         guard lastUFOCheckTime == 0 || CACurrentMediaTime() - lastUFOCheckTime >= ufoCheckInterval else {
