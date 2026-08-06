@@ -2218,53 +2218,29 @@ func setupGestures() {
 
         updatePlayer()
         updateGrid(dt: dt)
+        updateLasers(dt: dt)
+        updateEntities(dt: dt)
 
-        let entities = activeEntitySnapshot()
-        for node in entities {
-            guard let entity = node as? EntityNode else { continue }
+        // Use the safe snapshot
+        let allEntities = activeEntitySnapshot()
+        for entity in allEntities {
             switch entity.kind {
-            case .grasshopper:
-                updateGrasshopper(entity)
-            case .spider:
-                updateSpider(entity, dt: dt)
-            case .ladybug:
-                updateLadybugMovement(entity, dt: dt)
-            case .fly:
-                updateFly(entity, dt: dt)
-            default:
-                break
+            case .grasshopper: updateGrasshopper(entity)
+            case .spider:      updateSpider(entity, dt: dt)
+            case .ladybug:     updateLadybugMovement(entity, dt: dt)
+            case .fly:         updateFly(entity, dt: dt)
+            default: break
             }
         }
 
-        let centipedeHeads = activeEntitySnapshot(kind: .centipedeHead)
-        for node in centipedeHeads { updateCentipedeHead(node, dt: dt) }
+        let heads = activeEntitySnapshot(kind: .centipedeHead)
+        for head in heads { updateCentipedeHead(head, dt: dt) }
 
-        let centipedeSegments = activeEntitySnapshot(kind: .centipedeSegment)
-        for node in centipedeSegments { updateCentipedeSegment(node, dt: dt) }
+        let segments = activeEntitySnapshot(kind: .centipedeSegment)
+        for segment in segments { updateCentipedeSegment(segment, dt: dt) }
 
-        updateEntities(dt: dt)
-        updateLasers(dt: dt)
-
-        for fly in fliesToRemove { queueRemoval(fly) }
-        fliesToRemove.removeAll()
-
-        if autoFireEnabled, time - lastAutoFireTime >= autoFireInterval {
-            fireLaser()
-            lastAutoFireTime = time
-        }
-
-        if time - lastFireTime > max(0.6, 2.5 / gameState.difficulty) {
-            lastFireTime = time
-            spawnUFOIfNeeded()
-        }
-
-        if time - lastFlySpawnTime >= flySpawnInterval {
-            lastFlySpawnTime = time
-            if Int.random(in: 0...3) == 0 { spawnFly() }
-        }
-
-        applyPendingSceneMutations()
         cleanRemoveQueue()
+        applyPendingSceneMutations()
     }
     func restartGame() {
         pendingRestart = true
@@ -2376,18 +2352,29 @@ func setupGestures() {
     }
 
     func activeEntitySnapshot(kind filterKind: KnowledgeTree.EntityKind? = nil) -> [EntityNode] {
-        entityIndex.values.compactMap { entity in
-            guard entity.parent != nil else {
-                unregisterEntity(entity)   // auto-clean dead references
+        let currentEntities = Array(entityIndex.values)
+        
+        return currentEntities.compactMap { entity in
+            
+            // Safer guard - avoid direct .scene access if risky
+            guard
+                entity.parent != nil,                    // Must still be in hierarchy
+                !entity.isHidden,                        // Not hidden
+                entity.presentation != nil               // Can safely access presentation
+            else {
+                // Clean up bad entity
+                unregisterEntity(entity)
                 return nil
             }
+            
+            // Optional: Kind filter
             if let filterKind, entity.kind != filterKind {
                 return nil
             }
+            
             return entity
         }
     }
-
     func forceRemove(_ node: SCNNode) {
         guard node.parent != nil else { return }
         node.removeAllActions()

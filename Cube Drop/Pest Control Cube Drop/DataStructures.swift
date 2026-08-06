@@ -18,16 +18,23 @@ import AudioToolbox
 // action gets audible feedback without needing bundled audio assets.
 //======================================================================
 
-enum GameSound: SystemSoundID {
-    case laserFire      = 1104
-    case cubeHit        = 1105
-    case missileHit      = 1106
-    case enemyDestroyed = 1111
-    case bonus          = 1025
-    case gameOver        = 1073
+
+// Global sound preference backed by UserDefaults so UI can toggle sound.
+private enum SoundPreferences {
+    static let soundEnabledKey = "soundEnabled"
+
+    static var isSoundEnabled: Bool {
+        // Default to true if the key hasn't been set yet.
+        if let value = UserDefaults.standard.object(forKey: soundEnabledKey) as? Bool {
+            return value
+        } else {
+            return true
+        }
+    }
 }
 
 func playSound(_ id: SystemSoundID) {
+    guard SoundPreferences.isSoundEnabled else { return }
     AudioServicesPlaySystemSound(id)
 }
 
@@ -438,6 +445,8 @@ struct PhysicsCategory {
     static let fly: Int = 1 << 13
 }
 
+// Ensure all @Published properties are updated on the main actor to avoid data races with SwiftUI.
+@MainActor
 final class GameState: ObservableObject {
     @Published var score: Int = 0
     @Published var combo: Int = 0
@@ -462,3 +471,4 @@ final class EntityNode: SCNNode {
         fatalError("init(coder:) has not been implemented")
     }
 }
+
