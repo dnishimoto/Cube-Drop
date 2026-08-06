@@ -18,6 +18,14 @@ import AudioToolbox
 // action gets audible feedback without needing bundled audio assets.
 //======================================================================
 
+enum GameSound: SystemSoundID {
+    case laserFire      = 1104
+    case cubeHit        = 1105
+    case missileHit     = 1106
+    case enemyDestroyed = 1111
+    case bonus          = 1025
+    case gameOver       = 1073
+}
 
 // Global sound preference backed by UserDefaults so UI can toggle sound.
 private enum SoundPreferences {
@@ -36,6 +44,29 @@ private enum SoundPreferences {
 func playSound(_ id: SystemSoundID) {
     guard SoundPreferences.isSoundEnabled else { return }
     AudioServicesPlaySystemSound(id)
+}
+
+func playSound(_ sound: GameSound) {
+    playSound(sound.rawValue)
+}
+
+
+struct PhysicsCategory {
+    static let none: Int = 0
+    static let laser: Int = 1 << 0
+    static let cube: Int = 1 << 1
+    static let pointObject: Int = 1 << 2
+    static let ufo: Int = 1 << 3
+    static let missile: Int = 1 << 4
+    static let centipedeHead: Int = 1 << 5
+    static let mushroom: Int = 1 << 6
+    static let grasshopper: Int = 1 << 7
+    static let spider: Int = 1 << 8
+    static let ladybug: Int = 1 << 9
+    static let ground: Int = 1 << 10
+    static let centipedeSegment: Int = 1 << 11
+    static let player: Int = 1 << 12
+    static let fly: Int = 1 << 13
 }
 
 
@@ -77,6 +108,10 @@ final class KnowledgeTree {
         case fallsWithGravity
 
         case awardsScore(Int)
+
+        case deductsScoreOnContact(Int)
+
+        case dropsMissiles
 
         case spawnsMushroom
 
@@ -121,7 +156,7 @@ final class KnowledgeTree {
             behaviors: [
                 .hostile,
                 .destroyedByLaser,
-                .causesGameOverOnContact,
+                .deductsScoreOnContact(25),
                 .awardsScore(90)
             ],
             scoreValue: 90,
@@ -234,6 +269,8 @@ final class KnowledgeTree {
             behaviors: [
                 .hostile,
                 .destroyedByLaser,
+                .dropsMissiles,
+                .causesGameOverOnContact,
                 .awardsScore(300)
             ],
             scoreValue: 300,
@@ -427,23 +464,6 @@ final class KnowledgeTree {
     }
 }
 
-struct PhysicsCategory {
-    static let none: Int = 0
-    static let laser: Int = 1 << 0
-    static let cube: Int = 1 << 1
-    static let pointObject: Int = 1 << 2
-    static let ufo: Int = 1 << 3
-    static let missile: Int = 1 << 4
-    static let centipedeHead: Int = 1 << 5
-    static let mushroom: Int = 1 << 6
-    static let grasshopper: Int = 1 << 7
-    static let spider: Int = 1 << 8
-    static let ladybug: Int = 1 << 9
-    static let ground: Int = 1 << 10
-    static let centipedeSegment: Int = 1 << 11
-    static let player: Int = 1 << 12
-    static let fly: Int = 1 << 13
-}
 
 // Ensure all @Published properties are updated on the main actor to avoid data races with SwiftUI.
 @MainActor
