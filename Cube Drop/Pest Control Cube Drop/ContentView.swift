@@ -78,6 +78,10 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     var sceneView: SCNView!
     var scene: SCNScene!
     var cameraNode = SCNNode()
+    
+    private var waspDirection: [ObjectIdentifier: Float] = [:]
+    private var waspStinging: Set<ObjectIdentifier> = []
+    private var waspTargeting: Set<ObjectIdentifier> = []
 
     func topOfGridY() -> Float {
     let pitch = Float(cubeSize + cubeSpacing)
@@ -97,6 +101,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     var lastUpdateTime: TimeInterval = 0
     var lastFireTime: TimeInterval = 0
+    var lastWaspSpawnElapsedTime: TimeInterval = 0
 
     var lastFlySpawnTime: TimeInterval = 0
     var flySpawnInterval: TimeInterval = 6.0
@@ -189,6 +194,10 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     var centipedeLeaders = Set<ObjectIdentifier>()          // <-- add this
     
     @Published var playSoundFlag: Bool = false
+    
+    private var waspSpawnElapsedTime: TimeInterval = 0
+    private var waspSpawnInterval: TimeInterval = 20.0
+    private var waspHasSpawned = false
   
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -204,11 +213,167 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         spawnSpider()
         spawnLadybug()
         spawnFly()
+        spawnWasp()
         scene.physicsWorld.contactDelegate = self
         scene.physicsWorld.gravity =  SCNVector3(0, gravity, 0)
         sceneView.delegate = self
         sceneView.isPlaying = true
         sceneView.loops = true
+    }
+    func updateWasp(
+        _ wasp: EntityNode,
+        dt: TimeInterval
+    ) {
+        guard
+            let player = playerNode,
+            !gameState.isGameOver,
+            wasp.parent != nil
+        else {
+            return
+        }
+
+        let dtFloat = Float(min(dt, 0.05))
+
+        let current = wasp.presentation.worldPosition
+        let target = player.presentation.worldPosition
+
+        // ---------------------------------------------------------
+        // HORIZONTAL TRACKING
+        // ---------------------------------------------------------
+
+        let dx = target.x - current.x
+
+        let horizontalSpeed: Float =
+            3.5 + Float(gameState.difficulty) * 0.45
+
+        let maxStep =
+            horizontalSpeed * dtFloat
+
+        let step =
+            max(
+                -maxStep,
+                min(maxStep, dx)
+            )
+
+        wasp.position.x += step
+
+        // ---------------------------------------------------------
+        // ATTACK ALTITUDE
+        // ---------------------------------------------------------
+
+        let desiredY =
+            topOfGridY() + 3.0
+
+        let dy =
+            desiredY - wasp.position.y
+
+        let verticalSpeed: Float = 2.0
+
+        let verticalStep =
+            max(
+                -verticalSpeed * dtFloat,
+                min(
+                    verticalSpeed * dtFloat,
+                    dy
+                )
+            )
+
+        wasp.position.y += verticalStep
+    }
+    func spawnWasp() {
+
+        let size = cubeSize * 1.25
+
+        let plane =
+            makeLabelBillboard(
+                text: "🐝",
+                color: .yellow,
+                worldSize: size
+            )
+
+        let wasp =
+            EntityNode(
+                kind: .wasp,
+                geometry: plane
+            )
+
+        wasp.name = "Wasp"
+
+        let pitch =
+            Float(cubeSize + cubeSpacing)
+
+        let halfWidth =
+            Float(gridWidth) * pitch / 2.0
+
+        let x =
+            Float.random(
+                in: (-halfWidth + pitch)...(halfWidth - pitch)
+            )
+
+        let y =
+            topOfGridY() + 4.0
+
+        wasp.position =
+            SCNVector3(
+                x,
+                y,
+                wallZ
+            )
+
+        wasp.renderingOrder = 125
+
+        // ---------------------------------------------------------
+        // PHYSICS
+        // ---------------------------------------------------------
+
+        let body =
+            SCNPhysicsBody(
+                type: .kinematic,
+                shape: labelPhysicsShape(size: size)
+            )
+
+        body.categoryBitMask =
+            PhysicsCategory.wasp
+
+        body.contactTestBitMask =
+            PhysicsCategory.player |
+            PhysicsCategory.laser |
+            PhysicsCategory.missile
+
+        body.collisionBitMask =
+            PhysicsCategory.none
+
+        wasp.physicsBody = body
+
+        // ---------------------------------------------------------
+        // BILLBOARD
+        // ---------------------------------------------------------
+
+        let billboard =
+            SCNBillboardConstraint()
+
+        billboard.freeAxes = .all
+
+        wasp.constraints = [billboard]
+
+        // ---------------------------------------------------------
+        // TRACKING
+        // ---------------------------------------------------------
+
+        let id =
+            ObjectIdentifier(wasp)
+
+        waspDirection[id] =
+            Bool.random() ? 1.0 : -1.0
+
+        waspTargeting.insert(id)
+
+        addEntity(
+            wasp,
+            to: enemyRoot
+        )
+
+       
     }
     func setPlaySoundFlag(paramPlaySoundFlag : Bool)
     {
@@ -316,6 +481,34 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             return
         }
 
+        // --------------------------------------------------
+        // MISSILE / LASER HITS MUSHROOM
+        // --------------------------------------------------
+        let isMushroomA = categoryA == PhysicsCategory.mushroom
+        let isMushroomB = categoryB == PhysicsCategory.mushroom
+
+        if isLaserA && isMushroomB {
+            resolveHit(attacker: .playerLaser, target: b, contactPoint: contact.contactPoint)
+            destroyLaser(a, at: contact.contactPoint)
+            return
+        }
+        if isLaserB && isMushroomA {
+            resolveHit(attacker: .playerLaser, target: a, contactPoint: contact.contactPoint)
+            destroyLaser(b, at: contact.contactPoint)
+            return
+        }
+
+        if isMissileA && isMushroomB {
+            resolveHit(attacker: .missile, target: b, contactPoint: contact.contactPoint)
+            removeQueue.append(a)
+            return
+        }
+        if isMissileB && isMushroomA {
+            resolveHit(attacker: .missile, target: a, contactPoint: contact.contactPoint)
+            removeQueue.append(b)
+            return
+        }
+
         if isMissileA, let kindB = kindB, kindB == .pointObject {
             removeQueue.append(b)
             removeQueue.append(a)
@@ -338,7 +531,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
                 if playSoundFlag {
                     playSound(GameSound.gameOver.rawValue)
                 }
-                
             }
             removeQueue.append(a)
             return
@@ -349,7 +541,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
                 gameState.isGameOver = true
                 spawnExplosion(at: contact.contactPoint, color: .red)
                 if playSoundFlag {
-                    playSound(GameSound.gameOver.rawValue)}
+                    playSound(GameSound.gameOver.rawValue)
+                }
             }
             removeQueue.append(b)
             return
@@ -362,7 +555,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             PhysicsCategory.spider |
             PhysicsCategory.centipedeHead |
             PhysicsCategory.centipedeSegment |
-            PhysicsCategory.grasshopper
+            PhysicsCategory.grasshopper |
+            PhysicsCategory.wasp
 
         if (categoryA & dangerousCategories) != 0 && categoryB == PhysicsCategory.player {
             triggerGameOverFromEnemyContact(node: a, at: contact.contactPoint)
@@ -386,6 +580,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             handleFlyHitPlayer(fly: b)
             return
         }
+
         // --------------------------------------------------
         // FLY HITS GROUND -> DEDUCT POINTS, REMOVE FLY
         // --------------------------------------------------
@@ -398,6 +593,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             handleFlyHitGround(fly: b)
             return
         }
+
         // --------------------------------------------------
         // POINT / BONUS OBJECT HITS GROUND
         // --------------------------------------------------
@@ -410,6 +606,29 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         if let kB = kindB, (kB == .pointObject || kB == .bonusPointObject),
            categoryA == PhysicsCategory.ground {
             removeQueue.append(b)
+            return
+        }
+        // Wasp
+        
+        if (categoryA & dangerousCategories) != 0 &&
+            categoryB == PhysicsCategory.player {
+
+            triggerGameOverFromEnemyContact(
+                node: a,
+                at: contact.contactPoint
+            )
+
+            return
+        }
+
+        if (categoryB & dangerousCategories) != 0 &&
+            categoryA == PhysicsCategory.player {
+
+            triggerGameOverFromEnemyContact(
+                node: b,
+                at: contact.contactPoint
+            )
+
             return
         }
     }
@@ -551,18 +770,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
           targetParent.addChildNode(node)
           return node
       }
-/*
-      func removeEntity(_ node: SCNNode) {
-          unregisterEntity(node)
-          if let kind = kind(of: node) {
-              cleanupTrackingState(for: node, kind: kind)
-          }
-          node.removeAllActions()
-          node.physicsBody = nil
-          node.constraints = nil
-          node.removeFromParentNode()
-      }
- */
+
     func setupPlayer() {
         let size = cubeSize * 1.4
         let icon = makeLabelBillboard(text: "", color: .cyan, worldSize: size)
@@ -589,7 +797,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             PhysicsCategory.centipedeHead |
             PhysicsCategory.centipedeSegment |
             PhysicsCategory.ladybug |
-            PhysicsCategory.fly
+            PhysicsCategory.fly |
+            PhysicsCategory.mushroom
 
         body.collisionBitMask = PhysicsCategory.none
         player.physicsBody = body
@@ -1286,50 +1495,36 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         return nil
     }
 
-    func cleanupTrackingState(for node: SCNNode, kind: KnowledgeTree.EntityKind) {
-        let id = ObjectIdentifier(node)
-        switch kind {
-        case .spider:
-            removeSpiderThread(for: node)
-        case .ladybug:
-            ladybugDirection.removeValue(forKey: id)
-        case .grasshopper:
-            grasshopperJumping.remove(id)
-            grasshopperFalling.remove(id)   // ensure this
-        case .centipedeHead, .centipedeSegment:
-            centipedeDirection.removeValue(forKey: id)
-            centipedeDropping.remove(id)
-        default:
-            break
-        }
-    }
+    
     func resolveHit(
         attacker: KnowledgeTree.EntityKind,
         target: SCNNode,
         contactPoint: SCNVector3
     ) {
-        guard let targetKind = kind(of: target),
-              let profile = knowledge.profile(for: targetKind) else {
-            return
-        }
+        guard let targetKind = kind(of: target) else { return }
 
         var shouldDestroy = false
         var scoreDelta = 0
 
-        for behavior in profile.behaviors {
-            switch behavior {
-            case .destroyedByLaser:
-                if attacker == .playerLaser {
-                    shouldDestroy = true
+        // Fallback for mushrooms if KnowledgeTree is incomplete
+        if targetKind == .mushroom {
+            if attacker == .playerLaser || attacker == .missile {
+                shouldDestroy = true
+            }
+        }
+
+        if let profile = knowledge.profile(for: targetKind) {
+            for behavior in profile.behaviors {
+                switch behavior {
+                case .destroyedByLaser:
+                    if attacker == .playerLaser { shouldDestroy = true }
+                case .destroyedByMissile:
+                    if attacker == .missile { shouldDestroy = true }
+                case .awardsScore(let value):
+                    scoreDelta += value
+                default:
+                    break
                 }
-            case .destroyedByMissile:
-                if attacker == .missile {
-                    shouldDestroy = true
-                }
-            case .awardsScore(let value):
-                scoreDelta += value
-            default:
-                break
             }
         }
 
@@ -1356,28 +1551,46 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     func spawnMushroomFunc(at worldPosition: SCNVector3) {
         let size = cubeSize * 1.1
-        let geo = makeLabelBillboard(text: "🍄", color: .white, worldSize: size)
+        let geo = makeLabelBillboard(
+            text: "🍄",
+            color: .white,
+            worldSize: size
+        )
 
-        let node = EntityNode(kind: .mushroom, geometry: geo)
+        let node = EntityNode(
+            kind: .mushroom,
+            geometry: geo
+        )
+
         node.name = "mushroom"
         node.position = worldPosition
         node.renderingOrder = 90
 
-        let body = SCNPhysicsBody(type: .static, shape: labelPhysicsShape(size: size))
+        let body = SCNPhysicsBody(
+            type: .static,
+            shape: labelPhysicsShape(size: size)
+        )
+
         body.categoryBitMask = PhysicsCategory.mushroom
-        body.contactTestBitMask = PhysicsCategory.laser | PhysicsCategory.missile
+        body.contactTestBitMask =
+            PhysicsCategory.laser |
+            PhysicsCategory.missile
         body.collisionBitMask = PhysicsCategory.none
+
         node.physicsBody = body
+
         node.constraints = [SCNBillboardConstraint()]
+
         if let billboard = node.constraints?.first as? SCNBillboardConstraint {
             billboard.freeAxes = .all
         }
-        addEntity(node, to:enemyRoot)
+
+        addEntity(node, to: enemyRoot)
     }
-
     func destroy(node: SCNNode, kind: KnowledgeTree.EntityKind, at point: SCNVector3) {
+ 
         cleanupTrackingState(for: node, kind: kind)
-
+        
         let color = (node.geometry?.firstMaterial?.emission.contents as? UIColor) ?? .cyan
 
         if playSoundFlag
@@ -1397,7 +1610,14 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
                 playSound(GameSound.cubeHit.rawValue)}
             return
         }
-
+        
+        if kind == .wasp {
+            node.removeAllActions()
+            node.physicsBody = nil
+            //node.removeFromParentNode()
+            removeQueue.append(node)
+            return
+        }
         // --------------------------------------------------
         // CENTIPEDE HEAD DESTROYED -> PROMOTE FIRST SEGMENT TO HEAD
         // --------------------------------------------------
@@ -1954,7 +2174,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             }
         }
     }
-
+/*
     func updateEntities(dt: TimeInterval) {
         scene.rootNode.enumerateChildNodes { node, _ in
             guard let kind = self.kind(of: node) else { return }
@@ -1968,6 +2188,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             }
         }
     }
+ */
 
     func fireMissile(from ufo: SCNNode) {
         let geo = SCNCylinder(radius: 0.05, height: 0.45)
@@ -1978,16 +2199,32 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         missile.position = ufo.presentation.worldPosition
         missile.position.y -= 0.6
 
-        let body = SCNPhysicsBody(type: .kinematic, shape: SCNPhysicsShape(geometry: geo, options: nil))
+        let body = SCNPhysicsBody(
+            type: .kinematic,
+            shape: SCNPhysicsShape(geometry: geo, options: nil)
+        )
+
         body.categoryBitMask = PhysicsCategory.missile
-        body.contactTestBitMask = PhysicsCategory.cube | PhysicsCategory.player | PhysicsCategory.ground | PhysicsCategory.laser
+        body.contactTestBitMask =
+            PhysicsCategory.cube |
+            PhysicsCategory.player |
+            PhysicsCategory.ground |
+            PhysicsCategory.laser
+
         body.collisionBitMask = PhysicsCategory.none
         missile.physicsBody = body
 
-        addEntity(missile, to:enemyRoot)
+        addEntity(missile, to: enemyRoot)
+
         missile.runAction(.sequence([
-            .moveBy(x: 0, y: -12, z: 0, duration: 2.0 / gameState.difficulty),
+            .moveBy(
+                x: 0,
+                y: -12,
+                z: 0,
+                duration: 2.0 / gameState.difficulty
+            )
         ]))
+
         removeQueue.append(missile)
     }
 
@@ -2068,6 +2305,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         if let k = kind(of: node) {
             cleanupTrackingState(for: node, kind: k)
+
         }
         if playSoundFlag {
             playSound(GameSound.gameOver.rawValue)
@@ -2492,6 +2730,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         // Remove the fly
         removeQueue.append(fly)
     }
+   
     func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
         guard !isProcessingFrame else { return }
         isProcessingFrame = true
@@ -2499,7 +2738,22 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
         let dt = lastUpdateTime == 0 ? 0 : time - lastUpdateTime
         lastUpdateTime = time
+        
+        
         guard dt > 0 else { return }
+        
+       
+        
+
+         if
+            time - lastWaspSpawnElapsedTime > waspSpawnInterval
+           {
+
+          
+              spawnWasp()
+ 
+             lastWaspSpawnElapsedTime  = time
+         }
 
         //if gameState.isGameOver {
         //    applyPendingSceneMutations()
@@ -2509,7 +2763,6 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         updatePlayer()
         updateGrid(dt: dt)
         updateLasers(dt: dt)
-        updateEntities(dt: dt)
         
         if time - lastGrasshopperSpawnTime > grasshopperSpawnInterval {
                 spawnGrasshopper()
@@ -2564,6 +2817,12 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         for segment in segments {
             updateCentipedeSegment(segment, dt: dt)
         }
+        
+        enemyRoot.enumerateChildNodes { node, _ in
+            guard let e = node as? EntityNode, e.kind == .wasp else { return }
+            updateWasp(e,dt:dt)
+        }
+
 
         // ---- Cleanup ----
 
@@ -2595,6 +2854,10 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         gameState.combo = 0
         gameState.isGameOver = false
         gameState.difficulty = 1.0
+        
+        lastWaspSpawnElapsedTime = 0.0
+        lastFlySpawnTime = 0.0
+        lastGrasshopperSpawnTime = 0.0
 
         gridDirection = 1
         gridOffset = 0
@@ -2619,6 +2882,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         fliesToRemove.removeAll()
         flyWobble.removeAll()
         flyChaos.removeAll()
+
 
         setupGrid()
         spawnGrasshopper()
@@ -2751,7 +3015,27 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         removeQueue.removeAll()
     }
 
- 
+    func cleanupTrackingState(for node: SCNNode, kind: KnowledgeTree.EntityKind) {
+        if let index = removeQueue.firstIndex(where: { $0 === node }) {
+            removeQueue.remove(at: index)
+        }
+            let id = ObjectIdentifier(node)
+            switch kind {
+            case .spider:
+                removeSpiderThread(for: node)
+            case .ladybug:
+                ladybugDirection.removeValue(forKey: id)
+            case .grasshopper:
+                grasshopperJumping.remove(id)
+                grasshopperFalling.remove(id)   // ensure this
+            case .centipedeHead, .centipedeSegment:
+                centipedeDirection.removeValue(forKey: id)
+                centipedeDropping.remove(id)
+            default:
+                break
+            }
+        }
+
 
    
 

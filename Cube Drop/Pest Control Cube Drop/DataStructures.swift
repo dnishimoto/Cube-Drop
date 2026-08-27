@@ -67,6 +67,7 @@ struct PhysicsCategory {
     static let centipedeSegment: Int = 1 << 11
     static let player: Int = 1 << 12
     static let fly: Int = 1 << 13
+    static let wasp = 1 << 12
 }
 
 
@@ -94,6 +95,7 @@ final class KnowledgeTree {
         case spider
         case ladybug
         case fly
+        case wasp
     }
 
 
@@ -150,6 +152,23 @@ final class KnowledgeTree {
 
 
     init() {
+        
+        register(
+            .wasp,
+            behaviors: [
+                .hostile,
+                .destroyedByMissile,
+                .destroyedByLaser,
+                .causesGameOverOnContact,
+                .awardsScore(200)
+            ],
+            scoreValue: 200,
+            weakness: [
+                .playerLaser,
+                .missile
+            ],
+            canBeTargetedByLaser: true
+        )
 
         register(
             .fly,
