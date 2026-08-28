@@ -53,21 +53,22 @@ func playSound(_ sound: GameSound) {
 
 struct PhysicsCategory {
     static let none: Int = 0
-    static let laser: Int = 1 << 0
-    static let cube: Int = 1 << 1
-    static let pointObject: Int = 1 << 2
-    static let ufo: Int = 1 << 3
-    static let missile: Int = 1 << 4
-    static let centipedeHead: Int = 1 << 5
-    static let mushroom: Int = 1 << 6
-    static let grasshopper: Int = 1 << 7
-    static let spider: Int = 1 << 8
-    static let ladybug: Int = 1 << 9
-    static let ground: Int = 1 << 10
-    static let centipedeSegment: Int = 1 << 11
-    static let player: Int = 1 << 12
-    static let fly: Int = 1 << 13
-    static let wasp = 1 << 12
+
+       static let laser: Int = 1 << 0
+       static let cube: Int = 1 << 1
+       static let pointObject: Int = 1 << 2
+       static let ufo: Int = 1 << 3
+       static let missile: Int = 1 << 4
+       static let centipedeHead: Int = 1 << 5
+       static let mushroom: Int = 1 << 6
+       static let grasshopper: Int = 1 << 7
+       static let spider: Int = 1 << 8
+       static let ladybug: Int = 1 << 9
+       static let ground: Int = 1 << 10
+       static let centipedeSegment: Int = 1 << 11
+       static let player: Int = 1 << 12
+       static let fly: Int = 1 << 13
+       static let wasp: Int = 1 << 14
 }
 
 

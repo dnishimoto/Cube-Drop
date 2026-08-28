@@ -39,6 +39,10 @@ import Combine
 import AudioToolbox
 
 final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNPhysicsContactDelegate, UIGestureRecognizerDelegate {
+    
+    private var ufoDirection: [ObjectIdentifier: Float] = [:]
+    private var ufoLastFireTime: [ObjectIdentifier: TimeInterval] = [:]
+    
     let knowledge = KnowledgeTree()
     var gameState: GameState
 
@@ -220,10 +224,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         sceneView.isPlaying = true
         sceneView.loops = true
     }
-    func updateWasp(
-        _ wasp: EntityNode,
-        dt: TimeInterval
-    ) {
+    func updateWasp(_ wasp: EntityNode, dt: TimeInterval) {
         guard
             let player = playerNode,
             !gameState.isGameOver,
@@ -232,53 +233,35 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             return
         }
 
-        let dtFloat = Float(min(dt, 0.05))
+        let delta = Float(min(dt, 0.05))
 
-        let current = wasp.presentation.worldPosition
-        let target = player.presentation.worldPosition
+        let waspPosition = wasp.presentation.worldPosition
+        let playerPosition = player.presentation.worldPosition
 
-        // ---------------------------------------------------------
-        // HORIZONTAL TRACKING
-        // ---------------------------------------------------------
+        let dx = playerPosition.x - waspPosition.x
+        let dy = playerPosition.y - waspPosition.y
 
-        let dx = target.x - current.x
+        let horizontalSpeed: Float = 2.8 + Float(gameState.difficulty) * 0.4
+        let fallingSpeed: Float = 1.3 + Float(gameState.difficulty) * 0.25
 
-        let horizontalSpeed: Float =
-            3.5 + Float(gameState.difficulty) * 0.45
+        let xStep = max(
+            -horizontalSpeed * delta,
+            min(horizontalSpeed * delta, dx)
+        )
 
-        let maxStep =
-            horizontalSpeed * dtFloat
+        // The wasp only moves downward toward the player.
+        // min(..., 0) prevents it from flying upward if it goes below the player.
+        let desiredDownwardStep = min(dy, 0)
+        let yStep = max(
+            -fallingSpeed * delta,
+            desiredDownwardStep
+        )
 
-        let step =
-            max(
-                -maxStep,
-                min(maxStep, dx)
-            )
+        wasp.position.x += xStep
+        wasp.position.y += yStep
+        wasp.position.z = wallZ
 
-        wasp.position.x += step
-
-        // ---------------------------------------------------------
-        // ATTACK ALTITUDE
-        // ---------------------------------------------------------
-
-        let desiredY =
-            topOfGridY() + 3.0
-
-        let dy =
-            desiredY - wasp.position.y
-
-        let verticalSpeed: Float = 2.0
-
-        let verticalStep =
-            max(
-                -verticalSpeed * dtFloat,
-                min(
-                    verticalSpeed * dtFloat,
-                    dy
-                )
-            )
-
-        wasp.position.y += verticalStep
+        wasp.physicsBody?.resetTransform()
     }
     func spawnWasp() {
 
@@ -445,112 +428,15 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         let categoryA = a.physicsBody?.categoryBitMask ?? PhysicsCategory.none
         let categoryB = b.physicsBody?.categoryBitMask ?? PhysicsCategory.none
 
-        // --------------------------------------------------
-        // PLAYER LASER HITS OBJECT
-        // --------------------------------------------------
         let isLaserA = categoryA == PhysicsCategory.laser
         let isLaserB = categoryB == PhysicsCategory.laser
 
-        if isLaserA, kindB != nil {
-            resolveHit(attacker: .playerLaser, target: b, contactPoint: contact.contactPoint)
-            destroyLaser(a, at: contact.contactPoint)
-            return
-        }
-
-        if isLaserB, kindA != nil {
-            resolveHit(attacker: .playerLaser, target: a, contactPoint: contact.contactPoint)
-            destroyLaser(b, at: contact.contactPoint)
-            return
-        }
-
-        // --------------------------------------------------
-        // MISSILE HITS CUBE
-        // --------------------------------------------------
         let isMissileA = categoryA == PhysicsCategory.missile
         let isMissileB = categoryB == PhysicsCategory.missile
 
-        if isMissileA && categoryB == PhysicsCategory.cube {
-            spawnExplosion(at: contact.contactPoint, color: .systemRed)
-            removeQueue.append(a)
-            return
-        }
-
-        if isMissileB && categoryA == PhysicsCategory.cube {
-            spawnExplosion(at: contact.contactPoint, color: .systemRed)
-            removeQueue.append(b)
-            return
-        }
-
-        // --------------------------------------------------
-        // MISSILE / LASER HITS MUSHROOM
-        // --------------------------------------------------
         let isMushroomA = categoryA == PhysicsCategory.mushroom
         let isMushroomB = categoryB == PhysicsCategory.mushroom
 
-        if isLaserA && isMushroomB {
-            resolveHit(attacker: .playerLaser, target: b, contactPoint: contact.contactPoint)
-            destroyLaser(a, at: contact.contactPoint)
-            return
-        }
-        if isLaserB && isMushroomA {
-            resolveHit(attacker: .playerLaser, target: a, contactPoint: contact.contactPoint)
-            destroyLaser(b, at: contact.contactPoint)
-            return
-        }
-
-        if isMissileA && isMushroomB {
-            resolveHit(attacker: .missile, target: b, contactPoint: contact.contactPoint)
-            removeQueue.append(a)
-            return
-        }
-        if isMissileB && isMushroomA {
-            resolveHit(attacker: .missile, target: a, contactPoint: contact.contactPoint)
-            removeQueue.append(b)
-            return
-        }
-
-        if isMissileA, let kindB = kindB, kindB == .pointObject {
-            removeQueue.append(b)
-            removeQueue.append(a)
-            return
-        }
-
-        if isMissileB, let kindA = kindA, kindA == .pointObject {
-            removeQueue.append(a)
-            removeQueue.append(b)
-            return
-        }
-
-        // --------------------------------------------------
-        // MISSILE HITS PLAYER -> GAME OVER
-        // --------------------------------------------------
-        if isMissileA && categoryB == PhysicsCategory.player {
-            if !gameState.isGameOver {
-                gameState.isGameOver = true
-                spawnExplosion(at: contact.contactPoint, color: .red)
-                if playSoundFlag {
-                    playSound(GameSound.gameOver.rawValue)
-                }
-            }
-            removeQueue.append(a)
-            return
-        }
-
-        if isMissileB && categoryA == PhysicsCategory.player {
-            if !gameState.isGameOver {
-                gameState.isGameOver = true
-                spawnExplosion(at: contact.contactPoint, color: .red)
-                if playSoundFlag {
-                    playSound(GameSound.gameOver.rawValue)
-                }
-            }
-            removeQueue.append(b)
-            return
-        }
-
-        // --------------------------------------------------
-        // SPIDER / CENTIPEDE / GRASSHOPPER TOUCHES PLAYER -> GAME OVER
-        // --------------------------------------------------
         let dangerousCategories =
             PhysicsCategory.spider |
             PhysicsCategory.centipedeHead |
@@ -558,78 +444,316 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             PhysicsCategory.grasshopper |
             PhysicsCategory.wasp
 
-        if (categoryA & dangerousCategories) != 0 && categoryB == PhysicsCategory.player {
-            triggerGameOverFromEnemyContact(node: a, at: contact.contactPoint)
-            return
-        }
-
-        if (categoryB & dangerousCategories) != 0 && categoryA == PhysicsCategory.player {
-            triggerGameOverFromEnemyContact(node: b, at: contact.contactPoint)
-            return
-        }
-
         // --------------------------------------------------
-        // FLY HITS PLAYER -> DEDUCT POINTS, REMOVE FLY
+        // PLAYER LASER HITS AN ENTITY
+        // This also handles player laser -> missile.
         // --------------------------------------------------
-        if categoryA == PhysicsCategory.fly && categoryB == PhysicsCategory.player {
-            handleFlyHitPlayer(fly: a)
+        if isLaserA, kindB != nil {
+            print("🔫 Laser hit \(kindB!)")
+
+            resolveHit(
+                attacker: .playerLaser,
+                target: b,
+                contactPoint: contact.contactPoint
+            )
+
+            destroyLaser(a, at: contact.contactPoint)
             return
         }
 
-        if categoryB == PhysicsCategory.fly && categoryA == PhysicsCategory.player {
-            handleFlyHitPlayer(fly: b)
-            return
-        }
+        if isLaserB, kindA != nil {
+            print("🔫 Laser hit \(kindA!)")
 
-        // --------------------------------------------------
-        // FLY HITS GROUND -> DEDUCT POINTS, REMOVE FLY
-        // --------------------------------------------------
-        if categoryA == PhysicsCategory.fly && categoryB == PhysicsCategory.ground {
-            handleFlyHitGround(fly: a)
-            return
-        }
+            resolveHit(
+                attacker: .playerLaser,
+                target: a,
+                contactPoint: contact.contactPoint
+            )
 
-        if categoryB == PhysicsCategory.fly && categoryA == PhysicsCategory.ground {
-            handleFlyHitGround(fly: b)
+            destroyLaser(b, at: contact.contactPoint)
             return
         }
 
         // --------------------------------------------------
-        // POINT / BONUS OBJECT HITS GROUND
+        // MISSILE HITS PLAYER -> GAME OVER
+        // Must be before general missile collision handling.
         // --------------------------------------------------
-        if let kA = kindA, (kA == .pointObject || kA == .bonusPointObject),
-           categoryB == PhysicsCategory.ground {
+        if isMissileA && categoryB == PhysicsCategory.player {
+            print("💥 Missile hit player at \(contact.contactPoint)")
+
+            if !gameState.isGameOver {
+                gameState.isGameOver = true
+
+                spawnExplosion(
+                    at: contact.contactPoint,
+                    color: .red
+                )
+
+                if playSoundFlag {
+                    playSound(GameSound.gameOver.rawValue)
+                }
+            }
+
             removeQueue.append(a)
             return
         }
 
-        if let kB = kindB, (kB == .pointObject || kB == .bonusPointObject),
-           categoryA == PhysicsCategory.ground {
+        if isMissileB && categoryA == PhysicsCategory.player {
+            print("💥 Missile hit player at \(contact.contactPoint)")
+
+            if !gameState.isGameOver {
+                gameState.isGameOver = true
+
+                spawnExplosion(
+                    at: contact.contactPoint,
+                    color: .red
+                )
+
+                if playSoundFlag {
+                    playSound(GameSound.gameOver.rawValue)
+                }
+            }
+
             removeQueue.append(b)
             return
         }
-        // Wasp
-        
+
+        // --------------------------------------------------
+        // MISSILE HITS CUBE -> MISSILE EXPLODES; CUBE SURVIVES
+        // --------------------------------------------------
+        if isMissileA && categoryB == PhysicsCategory.cube {
+            print("💥 Missile hit cube")
+
+            spawnExplosion(
+                at: contact.contactPoint,
+                color: .systemRed
+            )
+
+            removeQueue.append(a)
+            return
+        }
+
+        if isMissileB && categoryA == PhysicsCategory.cube {
+            print("💥 Missile hit cube")
+
+            spawnExplosion(
+                at: contact.contactPoint,
+                color: .systemRed
+            )
+
+            removeQueue.append(b)
+            return
+        }
+
+        // --------------------------------------------------
+        // MISSILE HITS MUSHROOM
+        // --------------------------------------------------
+        if isMissileA && isMushroomB {
+            print("💥 Missile hit mushroom")
+
+            resolveHit(
+                attacker: .missile,
+                target: b,
+                contactPoint: contact.contactPoint
+            )
+
+            removeQueue.append(a)
+            return
+        }
+
+        if isMissileB && isMushroomA {
+            print("💥 Missile hit mushroom")
+
+            resolveHit(
+                attacker: .missile,
+                target: a,
+                contactPoint: contact.contactPoint
+            )
+
+            removeQueue.append(b)
+            return
+        }
+
+        // --------------------------------------------------
+        // MISSILE HITS A NORMAL OR BONUS POINT OBJECT
+        // --------------------------------------------------
+        if isMissileA,
+           let kindB,
+           kindB == .pointObject || kindB == .bonusPointObject {
+
+            removeQueue.append(a)
+            removeQueue.append(b)
+            return
+        }
+
+        if isMissileB,
+           let kindA,
+           kindA == .pointObject || kindA == .bonusPointObject {
+
+            removeQueue.append(a)
+            removeQueue.append(b)
+            return
+        }
+
+        // --------------------------------------------------
+        // MISSILE HITS GROUND
+        // --------------------------------------------------
+        if isMissileA && categoryB == PhysicsCategory.ground {
+            spawnExplosion(
+                at: contact.contactPoint,
+                color: .systemRed
+            )
+
+            removeQueue.append(a)
+            return
+        }
+
+        if isMissileB && categoryA == PhysicsCategory.ground {
+            spawnExplosion(
+                at: contact.contactPoint,
+                color: .systemRed
+            )
+
+            removeQueue.append(b)
+            return
+        }
+
+        // --------------------------------------------------
+        // DEADLY ENEMY HITS PLAYER -> GAME OVER
+        // Spider, centipede head/segment, grasshopper, wasp.
+        // --------------------------------------------------
         if (categoryA & dangerousCategories) != 0 &&
             categoryB == PhysicsCategory.player {
+
+            let enemyName = kindA.map { "\($0)" } ?? a.name ?? "unknown enemy"
+
+            print("""
+            💥 Player hit by \(enemyName)
+               Enemy position: \(a.presentation.worldPosition)
+               Player position: \(b.presentation.worldPosition)
+               Contact point: \(contact.contactPoint)
+            """)
 
             triggerGameOverFromEnemyContact(
                 node: a,
                 at: contact.contactPoint
             )
-
             return
         }
 
         if (categoryB & dangerousCategories) != 0 &&
             categoryA == PhysicsCategory.player {
 
+            let enemyName = kindB.map { "\($0)" } ?? b.name ?? "unknown enemy"
+
+            print("""
+            💥 Player hit by \(enemyName)
+               Enemy position: \(b.presentation.worldPosition)
+               Player position: \(a.presentation.worldPosition)
+               Contact point: \(contact.contactPoint)
+            """)
+
             triggerGameOverFromEnemyContact(
                 node: b,
                 at: contact.contactPoint
             )
-
             return
+        }
+
+        // --------------------------------------------------
+        // FLY HITS PLAYER -> SCORE PENALTY, NOT GAME OVER
+        // --------------------------------------------------
+        if categoryA == PhysicsCategory.fly &&
+            categoryB == PhysicsCategory.player {
+
+            print("🪰 Fly hit player: applying score penalty")
+            handleFlyHitPlayer(fly: a)
+            return
+        }
+
+        if categoryB == PhysicsCategory.fly &&
+            categoryA == PhysicsCategory.player {
+
+            print("🪰 Fly hit player: applying score penalty")
+            handleFlyHitPlayer(fly: b)
+            return
+        }
+
+        // --------------------------------------------------
+        // FLY HITS GROUND
+        // --------------------------------------------------
+        if categoryA == PhysicsCategory.fly &&
+            categoryB == PhysicsCategory.ground {
+
+            handleFlyHitGround(fly: a)
+            return
+        }
+
+        if categoryB == PhysicsCategory.fly &&
+            categoryA == PhysicsCategory.ground {
+
+            handleFlyHitGround(fly: b)
+            return
+        }
+
+        // --------------------------------------------------
+        // POINT OR BONUS POINT OBJECT HITS GROUND
+        // --------------------------------------------------
+        if let kindA,
+           kindA == .pointObject || kindA == .bonusPointObject,
+           categoryB == PhysicsCategory.ground {
+
+            removeQueue.append(a)
+            return
+        }
+
+        if let kindB,
+           kindB == .pointObject || kindB == .bonusPointObject,
+           categoryA == PhysicsCategory.ground {
+
+            removeQueue.append(b)
+            return
+        }
+    }
+    private func showPlayerHitMessage(by enemy: SCNNode) {
+        let name: String
+
+        switch kind(of: enemy) {
+        case .missile:
+            name = "Missile"
+        case .spider:
+            name = "Spider"
+        case .centipedeHead:
+            name = "Centipede head"
+        case .centipedeSegment:
+            name = "Centipede segment"
+        case .grasshopper:
+            name = "Grasshopper"
+        case .wasp:
+            name = "Wasp"
+        case .fly:
+            name = "Fly"
+        case .ladybug:
+            name = "Ladybug"
+        case .ufo:
+            name = "UFO"
+        default:
+            name = enemy.name ?? "Unknown object"
+        }
+
+        let message = "Player hit by \(name)"
+
+        print("💥 \(message)")
+
+        DispatchQueue.main.async {
+            let alert = UIAlertController(
+                title: "Player Hit",
+                message: message,
+                preferredStyle: .alert
+            )
+
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            self.present(alert, animated: true)
         }
     }
     private func skyGradientWithStars(size: Int) -> UIImage? {
@@ -798,8 +922,9 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             PhysicsCategory.centipedeSegment |
             PhysicsCategory.ladybug |
             PhysicsCategory.fly |
-            PhysicsCategory.mushroom
-
+            PhysicsCategory.mushroom |
+            PhysicsCategory.wasp
+        
         body.collisionBitMask = PhysicsCategory.none
         player.physicsBody = body
 
@@ -1551,41 +1676,55 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
 
     func spawnMushroomFunc(at worldPosition: SCNVector3) {
         let size = cubeSize * 1.1
-        let geo = makeLabelBillboard(
+
+        let geometry = makeLabelBillboard(
             text: "🍄",
             color: .white,
             worldSize: size
         )
 
-        let node = EntityNode(
+        let mushroom = EntityNode(
             kind: .mushroom,
-            geometry: geo
+            geometry: geometry
         )
 
-        node.name = "mushroom"
-        node.position = worldPosition
-        node.renderingOrder = 90
+        mushroom.name = "mushroom"
+        mushroom.position = worldPosition
+        mushroom.renderingOrder = 90
+
+        // The visual is a flat billboard, but the physics hitbox should be
+        // deeper in Z so a laser at wallZ reliably overlaps it.
+        let hitbox = SCNBox(
+            width: size * 0.75,
+            height: size * 0.75,
+            length: 0.35,
+            chamferRadius: 0
+        )
 
         let body = SCNPhysicsBody(
             type: .static,
-            shape: labelPhysicsShape(size: size)
+            shape: SCNPhysicsShape(
+                geometry: hitbox,
+                options: [
+                    SCNPhysicsShape.Option.type: SCNPhysicsShape.ShapeType.boundingBox
+                ]
+            )
         )
 
         body.categoryBitMask = PhysicsCategory.mushroom
+
         body.contactTestBitMask =
             PhysicsCategory.laser |
             PhysicsCategory.missile
+
         body.collisionBitMask = PhysicsCategory.none
+        mushroom.physicsBody = body
 
-        node.physicsBody = body
+        let billboard = SCNBillboardConstraint()
+        billboard.freeAxes = .all
+        mushroom.constraints = [billboard]
 
-        node.constraints = [SCNBillboardConstraint()]
-
-        if let billboard = node.constraints?.first as? SCNBillboardConstraint {
-            billboard.freeAxes = .all
-        }
-
-        addEntity(node, to: enemyRoot)
+        addEntity(mushroom, to: enemyRoot)
     }
     func destroy(node: SCNNode, kind: KnowledgeTree.EntityKind, at point: SCNVector3) {
  
@@ -2191,43 +2330,100 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
  */
 
     func fireMissile(from ufo: SCNNode) {
-        let geo = SCNCylinder(radius: 0.05, height: 0.45)
-        geo.firstMaterial?.diffuse.contents = UIColor.systemRed
-        geo.firstMaterial?.emission.contents = UIColor.systemRed
+        guard !gameState.isGameOver else { return }
 
-        let missile = EntityNode(kind: .missile, geometry: geo)
-        missile.position = ufo.presentation.worldPosition
-        missile.position.y -= 0.6
+        print("🚀 fireMissile called from UFO at \(ufo.presentation.worldPosition)")
+
+        let geometry = SCNCylinder(
+            radius: 0.10,
+            height: 0.75
+        )
+
+        let material = SCNMaterial()
+        material.diffuse.contents = UIColor.systemRed
+        material.emission.contents = UIColor.systemRed
+        material.lightingModel = .constant
+        geometry.materials = [material]
+
+        let missile = EntityNode(
+            kind: .missile,
+            geometry: geometry
+        )
+
+        missile.name = "missile"
+        missile.renderingOrder = 300
+
+        // Start directly below the UFO.
+        // Move slightly toward the camera so the missile is visually in front
+        // of the cubes rather than hidden behind/inside the cube wall.
+        let ufoPosition = ufo.presentation.worldPosition
+
+        missile.position = SCNVector3(
+            ufoPosition.x,
+            ufoPosition.y - 0.7,
+            wallZ + 0.45
+        )
+
+        let hitbox = SCNBox(
+            width: 0.20,
+            height: 0.85,
+            length: 0.35,
+            chamferRadius: 0
+        )
 
         let body = SCNPhysicsBody(
             type: .kinematic,
-            shape: SCNPhysicsShape(geometry: geo, options: nil)
+            shape: SCNPhysicsShape(
+                geometry: hitbox,
+                options: nil
+            )
         )
 
         body.categoryBitMask = PhysicsCategory.missile
+   
         body.contactTestBitMask =
             PhysicsCategory.cube |
             PhysicsCategory.player |
             PhysicsCategory.ground |
-            PhysicsCategory.laser
+            PhysicsCategory.laser |
+            PhysicsCategory.mushroom
+        
 
         body.collisionBitMask = PhysicsCategory.none
-        missile.physicsBody = body
+        body.isAffectedByGravity = false
 
+        missile.physicsBody = body
         addEntity(missile, to: enemyRoot)
 
-        missile.runAction(.sequence([
-            .moveBy(
-                x: 0,
-                y: -12,
-                z: 0,
-                duration: 2.0 / gameState.difficulty
-            )
-        ]))
+        let fallDuration = max(
+            1.2,
+            3.5 / gameState.difficulty
+        )
 
-        removeQueue.append(missile)
+        let fall = SCNAction.moveBy(
+            x: 0,
+            y: -12,
+            z: 0,
+            duration: fallDuration
+        )
+
+        let cleanup = SCNAction.run { [weak self, weak missile] _ in
+            guard let self = self,
+                  let missile = missile else {
+                return
+            }
+
+            print("🚀 Missile reached bottom without collision")
+            self.removeQueue.append(missile)
+        }
+
+        missile.runAction(
+            .sequence([
+                fall,
+                cleanup
+            ])
+        )
     }
-
     private func drawLabelImage(text: String, size: CGSize, color: UIColor? = nil) -> UIImage {
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { ctx in
@@ -2601,23 +2797,79 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
     }
 
     func updateUFO(_ ufo: SCNNode, dt: TimeInterval) {
-        let speed: Float = 2.0 * Float(gameState.difficulty)
-        let bounds: Float = Float(gridWidth) * Float(cubeSize + cubeSpacing) * 0.5 + Float(2.0)
-
-        var pos = ufo.position
-        pos.x += ufo.name == "ufoLeft" ? -speed * Float(dt) : speed * Float(dt)
-
-        if pos.x > bounds {
-            pos.x = bounds
-            ufo.scale.x = -1
-            fireMissile(from: ufo)
-        } else if pos.x < -bounds {
-            pos.x = -bounds
-            ufo.scale.x = 1
-            fireMissile(from: ufo)
+        guard
+            ufo.parent != nil,
+            !gameState.isGameOver
+        else {
+            return
         }
 
-        ufo.position = pos
+        let id = ObjectIdentifier(ufo)
+        let delta = Float(min(dt, 0.05))
+        let now = CACurrentMediaTime()
+
+        // --------------------------------------------------
+        // UFO MOVEMENT: LEFT <-> RIGHT ACROSS THE SCENE
+        // --------------------------------------------------
+        let speed: Float =
+            1.6 + Float(gameState.difficulty) * 0.30
+
+        let pitch = Float(cubeSize + cubeSpacing)
+        let halfGridWidth = Float(gridWidth) * pitch * 0.5
+
+        let leftBound = -halfGridWidth + 0.4
+        let rightBound = halfGridWidth - 0.4
+
+        var direction = ufoDirection[id] ?? 1.0
+        var position = ufo.position
+
+        // Move horizontally each SceneKit frame.
+        position.x += direction * speed * delta
+
+        // Reverse at right side.
+        if position.x >= rightBound {
+            position.x = rightBound
+            direction = -1.0
+            ufo.scale.x = -1.0
+        }
+
+        // Reverse at left side.
+        if position.x <= leftBound {
+            position.x = leftBound
+            direction = 1.0
+            ufo.scale.x = 1.0
+        }
+
+        ufoDirection[id] = direction
+        ufo.position = position
+        ufo.physicsBody?.resetTransform()
+
+        // --------------------------------------------------
+        // FIRE ON ENTRY, THEN FIRE AT INTERVALS
+        // --------------------------------------------------
+        let fireInterval = max(
+            0.70,
+            2.0 / gameState.difficulty
+        )
+
+        // First renderer update after spawn: fire immediately.
+        if ufoLastFireTime[id] == nil {
+            ufoLastFireTime[id] = now
+
+            print("🛸 UFO entered: firing first missile")
+            fireMissile(from: ufo)
+            return
+        }
+
+        // Every later shot must wait for the interval.
+        let lastFireTime = ufoLastFireTime[id] ?? now
+
+        if now - lastFireTime >= fireInterval {
+            ufoLastFireTime[id] = now
+
+            print("🛸 UFO interval missile")
+            fireMissile(from: ufo)
+        }
     }
 
     func updateLadybugs(dt: TimeInterval) {
@@ -2777,7 +3029,7 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         enemyRoot.enumerateChildNodes { node, _ in
             guard let e = node as? EntityNode else { return }
             switch e.kind {
-            case .grasshopper, .spider, .ladybug, .fly:
+            case .grasshopper, .spider, .ladybug, .fly,.ufo:
                 mobileEnemies.append(e)
             default:
                 break
@@ -2790,6 +3042,8 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
             case .spider:       updateSpider(entity, dt: dt)
             case .ladybug:      updateLadybugMovement(entity, dt: dt)
             case .fly:          updateFly(entity, dt: dt)
+            case .ufo:
+                updateUFO(entity, dt: dt)
             default:            break
             }
         }
@@ -3186,63 +3440,132 @@ final class GameViewController: UIViewController, SCNSceneRendererDelegate, SCNP
         physicsLeap(grasshopper: grasshopper, xDirection: xDirection)
     }
     func spawnUFOIfNeeded() {
-        // Only check periodically, not every frame
-        guard lastUFOCheckTime == 0 || CACurrentMediaTime() - lastUFOCheckTime >= ufoCheckInterval else {
+        // Only check periodically, not every frame.
+        let now = CACurrentMediaTime()
+
+        guard
+            lastUFOCheckTime == 0 ||
+            now - lastUFOCheckTime >= ufoCheckInterval
+        else {
             return
         }
-        lastUFOCheckTime = CACurrentMediaTime()
 
-        // Limit number of UFOs in the scene
+        lastUFOCheckTime = now
+
+        // Limit active UFO count.
         var ufoCount = 0
+
         enemyRoot.enumerateChildNodes { node, _ in
-            if let e = node as? EntityNode, e.kind == .ufo {
+            guard let entity = node as? EntityNode else {
+                return
+            }
+
+            if entity.kind == .ufo {
                 ufoCount += 1
             }
         }
-        let maxUFOs = 1 + Int(gameState.difficulty)  // e.g. 1 at diff 1, up to ~6 at diff 5
-        guard ufoCount < maxUFOs else { return }
 
-        // Spawn chance based on difficulty
-        let chance = Int.random(in: 0...1000)
-        let threshold = max(1, 950 - Int(gameState.difficulty * 120))
-        guard chance > threshold else {
-            print("UFO spawn check: no spawn (chance \(chance) <= threshold \(threshold))")
+        let maxUFOs = 1 + Int(gameState.difficulty)
+
+        guard ufoCount < maxUFOs else {
             return
         }
 
-        print("UFO spawn check: spawning UFO (chance \(chance) > threshold \(threshold))")
+        // Spawn chance scales with difficulty.
+        let chance = Int.random(in: 0...1000)
+        let threshold = max(
+            1,
+            950 - Int(gameState.difficulty * 120)
+        )
 
-        let geo = SCNTorus(ringRadius: 0.45, pipeRadius: 0.12)
-        geo.firstMaterial?.diffuse.contents = UIColor.systemPurple
-        geo.firstMaterial?.emission.contents = UIColor.systemPurple.withAlphaComponent(0.4)
+        guard chance > threshold else {
+            print(
+                "UFO spawn check: no spawn",
+                "(chance \(chance) <= threshold \(threshold))"
+            )
+            return
+        }
 
-        let ufo = EntityNode(kind: .ufo, geometry: geo)
-        ufo.position = SCNVector3(-8, topOfGridY() + 3.0, 0)
+        print(
+            "UFO spawn check: spawning UFO",
+            "(chance \(chance) > threshold \(threshold))"
+        )
 
-        let body = SCNPhysicsBody(type: .kinematic, shape: SCNPhysicsShape(geometry: geo, options: nil))
+        // --------------------------------------------------
+        // UFO VISUAL
+        // --------------------------------------------------
+        let geometry = SCNTorus(
+            ringRadius: 0.45,
+            pipeRadius: 0.12
+        )
+
+        let material = SCNMaterial()
+        material.diffuse.contents = UIColor.systemPurple
+        material.emission.contents = UIColor.systemPurple.withAlphaComponent(0.4)
+        material.lightingModel = .constant
+        geometry.materials = [material]
+
+        // --------------------------------------------------
+        // UFO ENTITY
+        // --------------------------------------------------
+        let ufo = EntityNode(
+            kind: .ufo,
+            geometry: geometry
+        )
+
+        ufo.name = "ufo"
+        ufo.renderingOrder = 140
+
+        // Start at the visible left edge of the grid.
+        let pitch = Float(cubeSize + cubeSpacing)
+        let halfGridWidth = Float(gridWidth) * pitch * 0.5
+
+        ufo.position = SCNVector3(
+            -halfGridWidth + 0.4,
+            topOfGridY() + 3.0,
+            wallZ
+        )
+
+        // --------------------------------------------------
+        // UFO PHYSICS
+        // --------------------------------------------------
+        let body = SCNPhysicsBody(
+            type: .kinematic,
+            shape: SCNPhysicsShape(
+                geometry: geometry,
+                options: nil
+            )
+        )
+
         body.categoryBitMask = PhysicsCategory.ufo
-        body.contactTestBitMask = PhysicsCategory.cube | PhysicsCategory.ground | PhysicsCategory.laser
+
+        body.contactTestBitMask =
+            PhysicsCategory.laser |
+            PhysicsCategory.missile
+
         body.collisionBitMask = PhysicsCategory.none
+        body.isAffectedByGravity = false
+
         ufo.physicsBody = body
+
+        let billboard = SCNBillboardConstraint()
+        billboard.freeAxes = .all
+        ufo.constraints = [billboard]
 
         addEntity(ufo, to: enemyRoot)
 
-        let travelDuration = Double(8.0 / gameState.difficulty)
+        // --------------------------------------------------
+        // INITIALIZE STATE FOR updateUFO(_:dt:)
+        // --------------------------------------------------
+        let id = ObjectIdentifier(ufo)
 
-        let moveRight = SCNAction.moveBy(x: 16, y: 0, z: 0, duration: travelDuration)
-        let moveLeft  = SCNAction.moveBy(x: -16, y: 0, z: 0, duration: travelDuration)
+        ufoDirection[id] = 1.0
 
-        let fire = SCNAction.run { [weak self, weak ufo] _ in
-            guard let self = self, let ufo = ufo else { return }
-            self.fireMissile(from: ufo)
-        }
+        // Nil means it has not fired yet.
+        // updateUFO(_:dt:) will fire the first missile immediately.
+        ufoLastFireTime.removeValue(forKey: id)
 
-        let cycle = SCNAction.sequence([
-            moveRight, .wait(duration: 0.4), fire, .wait(duration: 0.4),
-            moveLeft,  .wait(duration: 0.4), fire, .wait(duration: 0.4)
-        ])
-
-        ufo.runAction(.repeatForever(cycle))
+        print("🛸 UFO added at \(ufo.position)")
     }
 
     func destroyLaser(_ laser: SCNNode, at position: SCNVector3) {
